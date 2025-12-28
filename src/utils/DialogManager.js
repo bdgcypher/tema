@@ -3,12 +3,16 @@ import Gtk from 'gi://Gtk?version=4.0';
 import GLib from 'gi://GLib';
 
 const VIM_KEY_MAP = {
-    104: Gtk.DirectionType.LEFT, // h
-    106: Gtk.DirectionType.DOWN, // j
-    107: Gtk.DirectionType.UP, // k
-    108: Gtk.DirectionType.RIGHT, // l
+    104: Gtk.DirectionType.LEFT,
+    106: Gtk.DirectionType.DOWN,
+    107: Gtk.DirectionType.UP,
+    108: Gtk.DirectionType.RIGHT,
 };
 
+/**
+ * DialogManager - Manages all application dialogs
+ * Provides consistent dialog styling with vim keybindings
+ */
 export class DialogManager {
     constructor(app) {
         this.app = app;
@@ -26,9 +30,7 @@ export class DialogManager {
     _handleVimKey(dialog, keyval) {
         const direction = VIM_KEY_MAP[keyval];
 
-        if (direction === undefined) {
-            return false;
-        }
+        if (direction === undefined) return false;
 
         dialog.child_focus(direction);
         return true;
@@ -41,26 +43,33 @@ export class DialogManager {
             heading: 'Keyboard Shortcuts',
         });
 
-        const label = new Gtk.Label({
-            label: `Navigation
-Arrow Keys - Navigate through wallpapers
-h j k l - Vim-style navigation
-Tab - Move focus between elements
-Enter - Set selected wallpaper
-
-Actions
-e - Eject theme from wallpaper
-? - Show this help dialog
-q / Esc - Quit application`,
-            xalign: 0,
-            margin_start: 12,
-            margin_end: 12,
-            margin_top: 12,
-            margin_bottom: 12,
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 16,
+            margin_start: 16,
+            margin_end: 16,
+            margin_top: 8,
+            margin_bottom: 8,
         });
 
-        dialog.set_extra_child(label);
-        dialog.add_response('ok', 'Got it!');
+        const navSection = this._createShortcutSection('Navigation', [
+            ['Arrow Keys', 'Navigate wallpapers'],
+            ['h j k l', 'Vim navigation'],
+            ['Tab', 'Move focus'],
+            ['Enter', 'Apply selected wallpaper'],
+        ]);
+
+        const actionSection = this._createShortcutSection('Actions', [
+            ['e', 'Eject theme to folder'],
+            ['?', 'Show help'],
+            ['q / Esc', 'Quit application'],
+        ]);
+
+        content.append(navSection);
+        content.append(actionSection);
+
+        dialog.set_extra_child(content);
+        dialog.add_response('ok', 'Got it');
         dialog.set_default_response('ok');
         dialog.set_close_response('ok');
 
@@ -68,27 +77,63 @@ q / Esc - Quit application`,
         dialog.present();
     }
 
+    _createShortcutSection(title, shortcuts) {
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+        });
+
+        const titleLabel = new Gtk.Label({
+            label: title,
+            xalign: 0,
+            css_classes: ['heading'],
+        });
+
+        const listBox = new Gtk.ListBox({
+            selection_mode: Gtk.SelectionMode.NONE,
+            css_classes: ['boxed-list'],
+        });
+
+        for (const [key, description] of shortcuts) {
+            const row = new Adw.ActionRow({
+                title: description,
+            });
+
+            const keyLabel = new Gtk.Label({
+                label: key,
+                css_classes: ['dim-label', 'caption', 'monospace'],
+                valign: Gtk.Align.CENTER,
+            });
+
+            row.add_prefix(keyLabel);
+            listBox.append(row);
+        }
+
+        box.append(titleLabel);
+        box.append(listBox);
+
+        return box;
+    }
+
     showModeDialog(parent, filePath, fileName, callback) {
         const dialog = new Adw.MessageDialog({
             transient_for: parent,
             modal: true,
-            heading: 'Choose Theme Mode',
+            heading: 'Select Theme Mode',
+            body: `Generate theme from: ${fileName}`,
         });
 
-        dialog.add_response('dark', 'Dark Mode');
-        dialog.add_response('light', 'Light Mode');
+        dialog.add_response('dark', 'Dark');
+        dialog.add_response('light', 'Light');
         dialog.add_response('cancel', 'Cancel');
 
-        dialog.set_response_appearance(
-            'dark',
-            Adw.ResponseAppearance.SUGGESTED
-        );
+        dialog.set_response_appearance('dark', Adw.ResponseAppearance.SUGGESTED);
         dialog.set_default_response('dark');
         dialog.set_close_response('cancel');
 
         this.addVimKeybindings(dialog);
 
-        dialog.connect('response', (dialog, response) => {
+        dialog.connect('response', (d, response) => {
             if (response === 'dark' || response === 'light') {
                 callback(filePath, fileName, response === 'light');
             }
@@ -100,20 +145,17 @@ q / Esc - Quit application`,
 
     showError(message, parent = null) {
         print(`Error: ${message}`);
-        this._showMessageDialog('Error', message, parent);
+        this._showMessageDialog('Error', message, parent, 'dialog-error-symbolic');
     }
 
     showSuccess(message, parent = null) {
         print(`Success: ${message}`);
-        this._showMessageDialog('Success', message, parent);
+        this._showMessageDialog('Success', message, parent, 'emblem-ok-symbolic');
     }
 
-    _showMessageDialog(heading, message, parent = null) {
+    _showMessageDialog(heading, message, parent = null, iconName = null) {
         const window = parent || this.app.get_active_window();
-
-        if (!window) {
-            return;
-        }
+        if (!window) return;
 
         const dialog = new Adw.MessageDialog({
             transient_for: window,
@@ -131,15 +173,8 @@ q / Esc - Quit application`,
     showThemeEjectionDialog(parent, filePath, fileName, callback) {
         const dialog = this._createThemeEjectionDialog(parent, fileName);
 
-        dialog.connect('response', (dialog, response) => {
-            this._handleThemeEjectionResponse(
-                dialog,
-                response,
-                parent,
-                filePath,
-                fileName,
-                callback
-            );
+        dialog.connect('response', (d, response) => {
+            this._handleThemeEjectionResponse(d, response, parent, filePath, fileName, callback);
         });
 
         dialog.present();
@@ -150,17 +185,14 @@ q / Esc - Quit application`,
             transient_for: parent,
             modal: true,
             heading: 'Eject Theme',
-            body: `Create theme from: ${fileName}`,
+            body: `Create standalone theme from: ${fileName}`,
         });
 
-        dialog.add_response('dark', 'Dark Mode');
-        dialog.add_response('light', 'Light Mode');
+        dialog.add_response('dark', 'Dark');
+        dialog.add_response('light', 'Light');
         dialog.add_response('cancel', 'Cancel');
 
-        dialog.set_response_appearance(
-            'dark',
-            Adw.ResponseAppearance.SUGGESTED
-        );
+        dialog.set_response_appearance('dark', Adw.ResponseAppearance.SUGGESTED);
         dialog.set_default_response('dark');
         dialog.set_close_response('cancel');
 
@@ -169,14 +201,7 @@ q / Esc - Quit application`,
         return dialog;
     }
 
-    _handleThemeEjectionResponse(
-        dialog,
-        response,
-        parent,
-        filePath,
-        fileName,
-        callback
-    ) {
+    _handleThemeEjectionResponse(dialog, response, parent, filePath, fileName, callback) {
         if (response !== 'dark' && response !== 'light') {
             dialog.destroy();
             return;
@@ -184,13 +209,7 @@ q / Esc - Quit application`,
 
         const isLight = response === 'light';
         dialog.destroy();
-        this._showPathSelectionDialog(
-            parent,
-            filePath,
-            fileName,
-            isLight,
-            callback
-        );
+        this._showPathSelectionDialog(parent, filePath, fileName, isLight, callback);
     }
 
     _showPathSelectionDialog(parent, filePath, fileName, isLight, callback) {
@@ -199,26 +218,47 @@ q / Esc - Quit application`,
         const dialog = new Adw.MessageDialog({
             transient_for: parent,
             modal: true,
-            heading: 'Select Output Path',
-            body: 'Enter the path where the theme should be created:',
+            heading: 'Output Location',
+            body: 'Choose where to save the theme:',
         });
 
-        const entry = this._createPathEntry(defaultPath);
-        const box = this._createEntryContainer(entry);
+        const entry = new Gtk.Entry({
+            text: defaultPath,
+            hexpand: true,
+            margin_top: 12,
+            margin_bottom: 12,
+            margin_start: 16,
+            margin_end: 16,
+        });
+
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+        });
+
+        const hint = new Gtk.Label({
+            label: 'A folder will be created at this path',
+            css_classes: ['dim-label', 'caption'],
+            xalign: 0,
+            margin_start: 16,
+        });
+
+        box.append(entry);
+        box.append(hint);
         dialog.set_extra_child(box);
 
-        this._configurePathDialogResponses(dialog);
+        dialog.add_response('create', 'Create Theme');
+        dialog.add_response('cancel', 'Cancel');
+        dialog.set_response_appearance('create', Adw.ResponseAppearance.SUGGESTED);
+        dialog.set_default_response('create');
+        dialog.set_close_response('cancel');
 
-        dialog.connect('response', (dialog, response) => {
-            this._handlePathSelectionResponse(
-                dialog,
-                response,
-                entry,
-                filePath,
-                fileName,
-                isLight,
-                callback
-            );
+        dialog.connect('response', (d, response) => {
+            if (response === 'create') {
+                const outputPath = entry.get_text();
+                callback(filePath, fileName, isLight, outputPath);
+            }
+            dialog.destroy();
         });
 
         dialog.present();
@@ -227,54 +267,7 @@ q / Esc - Quit application`,
 
     _getDefaultThemePath(fileName) {
         const homeDir = GLib.get_home_dir();
-        const themeName = fileName.replace(/\.[^.]+$/, '');
+        const themeName = fileName.replace(/\.[^.]+$/, '').replace(/\s+/g, '-').toLowerCase();
         return `${homeDir}/omarchy-${themeName}-theme`;
-    }
-
-    _createPathEntry(defaultPath) {
-        return new Gtk.Entry({
-            text: defaultPath,
-            hexpand: true,
-            margin_top: 12,
-            margin_bottom: 12,
-            margin_start: 12,
-            margin_end: 12,
-        });
-    }
-
-    _createEntryContainer(entry) {
-        const box = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 6,
-        });
-        box.append(entry);
-        return box;
-    }
-
-    _configurePathDialogResponses(dialog) {
-        dialog.add_response('create', 'Create Theme');
-        dialog.add_response('cancel', 'Cancel');
-        dialog.set_response_appearance(
-            'create',
-            Adw.ResponseAppearance.SUGGESTED
-        );
-        dialog.set_default_response('create');
-        dialog.set_close_response('cancel');
-    }
-
-    _handlePathSelectionResponse(
-        dialog,
-        response,
-        entry,
-        filePath,
-        fileName,
-        isLight,
-        callback
-    ) {
-        if (response === 'create') {
-            const outputPath = entry.get_text();
-            callback(filePath, fileName, isLight, outputPath);
-        }
-        dialog.destroy();
     }
 }

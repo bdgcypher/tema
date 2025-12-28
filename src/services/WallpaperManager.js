@@ -3,109 +3,159 @@ import Gio from 'gi://Gio';
 import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 
-import {SubprocessUtils} from '../utils/SubprocessUtils.js';
+import {
+    extractColorsWithImageMagick,
+    checkImageMagickAvailable,
+    paletteToColorsObject,
+} from './ColorExtractor.js';
 
-const WAL_PATHS = [
-    'wal',
-    '/usr/bin/wal',
-    '/usr/local/bin/wal',
-    GLib.get_home_dir() + '/.local/bin/wal',
-    '/bin/wal',
-];
-
+/**
+ * WallpaperManager - Handles wallpaper selection and color extraction
+ * Uses ImageMagick for color extraction (no pywal dependency)
+ */
 export class WallpaperManager {
     constructor(app) {
         this.app = app;
+        this._imageMagickAvailable = null;
     }
 
-    setWallpaper(imagePath, fileName, lightMode) {
-        const walPath = this.findWalExecutable();
-        if (!walPath) {
-            this._showWalNotFoundError();
-            return;
+    /**
+     * Sets a wallpaper and extracts colors using ImageMagick
+     * @param {string} imagePath - Path to the wallpaper image
+     * @param {string} fileName - Name of the wallpaper file
+     * @param {boolean} lightMode - Whether to generate light mode palette
+     */
+    async setWallpaper(imagePath, fileName, lightMode) {
+        const spinnerDialog = this._createSpinnerDialog();
+
+        try {
+            const available = await this._checkImageMagick();
+            if (!available) {
+                spinnerDialog.destroy();
+                this._showImageMagickNotFoundError();
+                return;
+            }
+
+            print(`Extracting colors from ${fileName} (${lightMode ? 'light' : 'dark'} mode)...`);
+
+            const palette = await extractColorsWithImageMagick(imagePath, lightMode);
+            const colors = paletteToColorsObject(palette, imagePath);
+
+            // Store colors in cache for other components
+            this._cacheColors(colors);
+
+            spinnerDialog.destroy();
+
+            // Generate theme files
+            this._onExtractionSuccess(fileName, lightMode, colors);
+        } catch (error) {
+            spinnerDialog.destroy();
+            this.app.showError(`Error extracting colors: ${error.message}`);
+            console.error('Color extraction error:', error);
+        }
+    }
+
+    /**
+     * Checks if ImageMagick is available (cached)
+     */
+    async _checkImageMagick() {
+        if (this._imageMagickAvailable !== null) {
+            return this._imageMagickAvailable;
         }
 
-        const spinnerDialog = this._createSpinnerDialog();
-        this._executeWal(
-            walPath,
-            imagePath,
-            lightMode,
-            spinnerDialog,
-            fileName
-        );
+        this._imageMagickAvailable = await checkImageMagickAvailable();
+        return this._imageMagickAvailable;
     }
 
-    findWalExecutable() {
-        return SubprocessUtils.findExecutable('wal', WAL_PATHS);
-    }
+    /**
+     * Shows error when ImageMagick is not found
+     */
+    _showImageMagickNotFoundError() {
+        const errorMessage = `ImageMagick not found. Please install ImageMagick:
 
-    _showWalNotFoundError() {
-        const errorMessage = `Error: wal not found. Please install pywal.\nChecked paths: ${WAL_PATHS.join(', ')}`;
+Arch Linux: sudo pacman -S imagemagick
+Ubuntu/Debian: sudo apt install imagemagick
+Fedora: sudo dnf install ImageMagick`;
+
         this.app.showError(errorMessage);
     }
 
-    _executeWal(walPath, imagePath, lightMode, spinnerDialog, fileName) {
-        const walArgs = this._buildWalArgs(walPath, imagePath, lightMode);
-        const launcher = this._createSubprocessLauncher();
-        const walProcess = launcher.spawnv(walArgs);
-
-        walProcess.communicate_utf8_async(null, null, (source, result) => {
-            this._handleWalCompletion(
-                walProcess,
-                result,
-                spinnerDialog,
-                fileName,
-                lightMode
-            );
-        });
-    }
-
-    _buildWalArgs(walPath, imagePath, lightMode) {
-        const baseArgs = [walPath, '-n', '-s', '-t', '-e', '-i', imagePath];
-        if (lightMode) {
-            baseArgs.splice(5, 0, '-l');
-        }
-        return baseArgs;
-    }
-
-    _createSubprocessLauncher() {
-        return SubprocessUtils.createSubprocessLauncher();
-    }
-
-    _handleWalCompletion(
-        walProcess,
-        result,
-        spinnerDialog,
-        fileName,
-        lightMode
-    ) {
-        try {
-            const [, , walStderr] = walProcess.communicate_utf8_finish(result);
-            spinnerDialog.destroy();
-
-            if (walProcess.get_successful()) {
-                this._onWalSuccess(fileName, lightMode);
-            } else {
-                this.app.showError(`Error running wal: ${walStderr}`);
-            }
-        } catch (error) {
-            spinnerDialog.destroy();
-            this.app.showError(`Error: ${error.message}`);
-        }
-    }
-
-    _onWalSuccess(fileName, lightMode) {
+    /**
+     * Called when color extraction succeeds
+     */
+    _onExtractionSuccess(fileName, lightMode, colors) {
         const mode = lightMode ? 'light' : 'dark';
-        print(`Wallpaper and colors set using wal (${mode} mode): ${fileName}`);
-        this.app.themeGenerator.generateTemplates();
+        print(`Colors extracted successfully (${mode} mode): ${fileName}`);
+
+        // Generate templates with the extracted colors
+        this.app.themeGenerator.generateTemplatesWithColors(colors);
     }
 
+    /**
+     * Caches the extracted colors for other components
+     */
+    _cacheColors(colors) {
+        const homeDir = GLib.get_home_dir();
+        const cacheDir = homeDir + '/.cache/tema';
+        const colorsFile = cacheDir + '/colors.json';
+
+        try {
+            const cacheDirFile = Gio.File.new_for_path(cacheDir);
+            if (!cacheDirFile.query_exists(null)) {
+                cacheDirFile.make_directory_with_parents(null);
+            }
+
+            const file = Gio.File.new_for_path(colorsFile);
+            const jsonContent = JSON.stringify(colors, null, 2);
+            const encoded = new TextEncoder().encode(jsonContent);
+
+            file.replace_contents(
+                encoded,
+                null,
+                false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                null
+            );
+
+            print('Colors cached to:', colorsFile);
+        } catch (error) {
+            console.error('Error caching colors:', error.message);
+        }
+    }
+
+    /**
+     * Reads cached colors
+     */
+    getCachedColors() {
+        const homeDir = GLib.get_home_dir();
+        const colorsFile = homeDir + '/.cache/tema/colors.json';
+        const file = Gio.File.new_for_path(colorsFile);
+
+        if (!file.query_exists(null)) {
+            return null;
+        }
+
+        try {
+            const [success, contents] = file.load_contents(null);
+            if (!success) return null;
+
+            const jsonContent = new TextDecoder().decode(contents);
+            return JSON.parse(jsonContent);
+        } catch (error) {
+            console.error('Error reading cached colors:', error.message);
+            return null;
+        }
+    }
+
+    /**
+     * Creates a spinner dialog for processing feedback
+     */
     _createSpinnerDialog() {
         const dialog = new Adw.MessageDialog({
             transient_for: this.app.get_active_window(),
             modal: true,
-            heading: 'Processing...',
-            body: 'Generating colors with pywal...',
+            heading: 'Extracting Colors',
+            body: 'Analyzing wallpaper with ImageMagick...',
         });
 
         const spinner = new Gtk.Spinner({
@@ -127,6 +177,9 @@ export class WallpaperManager {
         return dialog;
     }
 
+    /**
+     * Restarts swaybg with a new background
+     */
     restartSwaybg(backgroundLink) {
         if (!this._isSwaybgRunning()) {
             return;
@@ -134,9 +187,12 @@ export class WallpaperManager {
 
         this._killSwaybg();
         this._startSwaybg(backgroundLink);
-        print('✓ Restarted swaybg with new background');
+        print('Restarted swaybg with new background');
     }
 
+    /**
+     * Checks if swaybg is running
+     */
     _isSwaybgRunning() {
         try {
             const checkProcess = new Gio.Subprocess({
@@ -153,6 +209,9 @@ export class WallpaperManager {
         }
     }
 
+    /**
+     * Kills running swaybg instances
+     */
     _killSwaybg() {
         try {
             const killProcess = new Gio.Subprocess({
@@ -166,6 +225,9 @@ export class WallpaperManager {
         }
     }
 
+    /**
+     * Starts swaybg with the specified background
+     */
     _startSwaybg(backgroundLink) {
         try {
             const startArgs = this._buildSwaybgArgs(backgroundLink);
@@ -179,6 +241,9 @@ export class WallpaperManager {
         }
     }
 
+    /**
+     * Builds swaybg command arguments
+     */
     _buildSwaybgArgs(backgroundLink) {
         const baseArgs = ['swaybg', '-i', backgroundLink, '-m', 'fill'];
 
@@ -189,7 +254,19 @@ export class WallpaperManager {
         return baseArgs;
     }
 
+    /**
+     * Checks if uwsm is available
+     */
     _isUwsmAvailable() {
-        return SubprocessUtils.checkCommandExists('uwsm');
+        try {
+            const proc = Gio.Subprocess.new(
+                ['which', 'uwsm'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+            );
+            proc.communicate_utf8(null, null);
+            return proc.get_exit_status() === 0;
+        } catch (e) {
+            return false;
+        }
     }
 }

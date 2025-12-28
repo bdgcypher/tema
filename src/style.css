@@ -1,83 +1,199 @@
-/* Remove border radius for selected images */
-flowboxchild:selected {
-    border: 3px solid @accent_color;
+/* Tema - Sharp, Clean, Compact UI */
+
+/* Remove all rounded corners */
+* {
     border-radius: 0;
-    background: none;
+}
+
+/* Window */
+window {
+    border-radius: 0;
+}
+
+/* Header bar - compact */
+headerbar {
+    min-height: 32px;
+    padding: 0 4px;
+    border-bottom: 1px solid alpha(@window_fg_color, 0.1);
+}
+
+headerbar .title {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+headerbar button {
+    min-height: 24px;
+    min-width: 24px;
+    padding: 2px 6px;
+    margin: 2px;
+}
+
+headerbar button.image-button {
+    padding: 2px;
+}
+
+/* Thumbnail grid - compact */
+flowbox {
+    padding: 2px;
+}
+
+flowboxchild {
     padding: 0;
     margin: 0;
+    border-radius: 0;
+    transition: all 100ms ease;
 }
 
 flowboxchild:hover {
+    background-color: alpha(@accent_color, 0.08);
+}
+
+flowboxchild:selected {
+    background-color: alpha(@accent_color, 0.12);
+    outline: 2px solid @accent_color;
+    outline-offset: -2px;
+}
+
+flowboxchild:selected:hover {
+    background-color: alpha(@accent_color, 0.18);
+}
+
+flowboxchild:focus {
+    outline: 2px solid @accent_color;
+    outline-offset: -2px;
+}
+
+/* Thumbnail boxes - compact */
+.thumbnail-box {
+    padding: 2px;
+}
+
+.thumbnail-frame {
+    border-radius: 0;
+    background-color: alpha(@window_fg_color, 0.03);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+.thumbnail-picture {
     border-radius: 0;
 }
 
-flowboxchild:selected > box {
-    border-radius: 0;
-    background: none;
-    padding: 0;
-    margin: 0;
-}
-
-/* Remove border radius for modal dialogs */
-messagedialog {
-    border-radius: 0;
-}
-
-window.dialog {
-    border-radius: 0;
-}
-
-window.messagedialog {
-    border-radius: 0;
-}
-
-.dialog-content-area {
-    border-radius: 0;
-}
-
-/* Remove border radius for buttons */
+/* Buttons - sharp */
 button {
+    border-radius: 0;
+    min-height: 28px;
+    padding: 4px 10px;
+}
+
+button.flat {
     border-radius: 0;
 }
 
 button:focus {
     outline-color: @accent_color;
+    outline-offset: 1px;
 }
 
 .suggested-action {
-    border-radius: 0;
     background-color: @accent_color;
+    color: white;
 }
 
-.destructive-action {
-    border-radius: 0;
+.suggested-action:hover {
+    background-color: shade(@accent_color, 1.1);
 }
 
-/* Remove border radius for dialog buttons */
-.dialog-action-area button {
-    border-radius: 0;
-}
-
-/* Remove border radius for all Adwaita message dialog components */
+/* Dialogs - sharp */
+messagedialog,
+window.dialog,
+window.messagedialog,
 .message-dialog {
     border-radius: 0;
 }
 
-.message-dialog .dialog-action-area {
+.dialog-content-area {
+    padding: 8px;
+}
+
+/* Entry fields */
+entry {
+    border-radius: 0;
+    min-height: 30px;
+}
+
+entry:focus {
+    outline-color: @accent_color;
+}
+
+/* Lists */
+.boxed-list {
+    border-radius: 0;
+    margin: 4px 0;
+}
+
+.boxed-list row {
+    padding: 6px 10px;
     border-radius: 0;
 }
 
-.message-dialog button {
+/* Preferences window */
+preferenceswindow .navigation-sidebar {
     border-radius: 0;
 }
 
-/* Small header buttons */
-.small-button {
-    font-size: 11px;
-    padding: 2px 6px;
-    min-height: 20px;
+preferencesgroup {
+    margin: 4px;
 }
 
-.small-button image {
-    -gtk-icon-size: 14px;
+/* Spinner - smaller */
+spinner {
+    opacity: 0.5;
+}
+
+/* Scrollbar - thin */
+scrollbar {
+    border-radius: 0;
+}
+
+scrollbar slider {
+    border-radius: 0;
+    min-width: 4px;
+    min-height: 4px;
+}
+
+/* Typography */
+.monospace {
+    font-family: monospace;
+}
+
+.caption {
+    font-size: 0.8em;
+}
+
+.heading {
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+/* Empty state */
+.title-2 {
+    font-size: 1.2em;
+    font-weight: 600;
+}
+
+/* Compact scrolled window */
+scrolledwindow {
+    border-radius: 0;
+}
+
+/* Menu/popover */
+popover,
+popover.menu {
+    border-radius: 0;
+}
+
+/* Preferences rows */
+row {
+    border-radius: 0;
 }

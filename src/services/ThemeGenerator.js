@@ -3,33 +3,38 @@ import Gio from 'gi://Gio';
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 
-import {SubprocessUtils} from '../utils/SubprocessUtils.js';
-import {ColorUtils} from '../utils/ColorUtils.js';
+import {
+    extractColorsWithImageMagick,
+    checkImageMagickAvailable,
+    paletteToColorsObject,
+} from './ColorExtractor.js';
+import {
+    stripHash,
+    hexToRgbString,
+    hexToRgba,
+    hexToYaruTheme,
+    calculateLuminance,
+    hexToRgb,
+} from '../utils/ColorUtils.js';
 
-const IMAGE_EXTENSIONS = [
-    '.jpg',
-    '.jpeg',
-    '.png',
-    '.gif',
-    '.bmp',
-    '.webp',
-    '.tiff',
-];
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'];
 const LUMINANCE_LIGHT_THRESHOLD = 0.5;
 
+/**
+ * ThemeGenerator - Generates theme files from extracted colors
+ * Uses ImageMagick for color extraction (no pywal dependency)
+ */
 export class ThemeGenerator {
     constructor(app) {
         this.app = app;
     }
 
-    generateTemplates() {
-        print('Generating templates with pywal colors...');
-
-        const colors = this.readPywalColors();
-        if (!colors) {
-            print('Error: Could not read pywal colors');
-            return;
-        }
+    /**
+     * Generates templates using colors provided directly
+     * @param {Object} colors - Colors object with color0-15, background, foreground, etc.
+     */
+    generateTemplatesWithColors(colors) {
+        print('Generating templates with extracted colors...');
 
         const templatesDir = this.findTemplatesDirectory();
         if (!templatesDir) {
@@ -47,8 +52,44 @@ export class ThemeGenerator {
         this._processAllTemplates(templatesDir, temaThemeDir, colors);
         this._finalizeTheme(homeDir, configBase, temaThemeDir, colors);
 
-        print('✓ Template generation complete!');
+        print('Template generation complete!');
         this.app.temaTheming.applyDynamicTheming();
+    }
+
+    /**
+     * Legacy method - reads cached colors and generates templates
+     */
+    generateTemplates() {
+        const colors = this._readCachedColors();
+        if (!colors) {
+            print('Error: Could not read cached colors');
+            return;
+        }
+        this.generateTemplatesWithColors(colors);
+    }
+
+    /**
+     * Reads colors from tema cache
+     */
+    _readCachedColors() {
+        const colorsFile = Gio.File.new_for_path(
+            GLib.get_home_dir() + '/.cache/tema/colors.json'
+        );
+
+        if (!colorsFile.query_exists(null)) {
+            return null;
+        }
+
+        try {
+            const [success, content] = colorsFile.load_contents(null);
+            if (!success) return null;
+
+            const jsonContent = new TextDecoder().decode(content);
+            return JSON.parse(jsonContent);
+        } catch (error) {
+            print('Error reading cached colors:', error.message);
+            return null;
+        }
     }
 
     _showTemplatesNotFoundError() {
@@ -60,8 +101,6 @@ export class ThemeGenerator {
 
     _processAllTemplates(templatesDir, temaThemeDir, colors) {
         this.processTemplates(templatesDir, temaThemeDir, colors);
-        this.copyStaticFiles(templatesDir, temaThemeDir);
-        this.generateIconsTheme(temaThemeDir, colors);
         this.handleLightMode(colors, temaThemeDir);
     }
 
@@ -69,46 +108,6 @@ export class ThemeGenerator {
         this.symlinkWallpapers(homeDir, temaThemeDir);
         this.applyOmarchyTheme();
         this.setOmarchyBackground(colors, configBase);
-    }
-
-    readPywalColors() {
-        const colorsFile = Gio.File.new_for_path(
-            GLib.get_home_dir() + '/.cache/wal/colors.json'
-        );
-
-        if (!colorsFile.query_exists(null)) {
-            return null;
-        }
-
-        try {
-            const [success, content] = colorsFile.load_contents(null);
-            if (!success) {
-                return null;
-            }
-
-            const jsonContent = new TextDecoder('utf-8').decode(content);
-            const data = JSON.parse(jsonContent);
-
-            return this._buildColorsObject(data);
-        } catch (error) {
-            print('Error reading pywal colors:', error.message);
-            return null;
-        }
-    }
-
-    _buildColorsObject(data) {
-        const colors = {
-            background: data.special.background,
-            foreground: data.special.foreground,
-            cursor: data.special.cursor,
-            wallpaper: data.wallpaper,
-        };
-
-        for (let i = 0; i < 16; i++) {
-            colors[`color${i}`] = data.colors[`color${i}`];
-        }
-
-        return colors;
     }
 
     findTemplatesDirectory() {
@@ -147,24 +146,18 @@ export class ThemeGenerator {
             ['walker.css', temaThemeDir + '/walker.css'],
             ['hyprlock.conf', temaThemeDir + '/hyprlock.conf'],
             ['chromium.theme', temaThemeDir + '/chromium.theme'],
+            ['gtk.css', temaThemeDir + '/gtk.css'],
+            ['warp.yaml', temaThemeDir + '/warp.yaml'],
+            ['icons.theme', temaThemeDir + '/icons.theme'],
+            ['neovim.lua', temaThemeDir + '/neovim.lua'],
         ];
 
         for (const [templateName, temaOutput] of templateMappings) {
-            const templateFile = Gio.File.new_for_path(
-                templatesDir + '/' + templateName
-            );
+            const templateFile = Gio.File.new_for_path(templatesDir + '/' + templateName);
             if (templateFile.query_exists(null)) {
-                this.processTemplate(
-                    templateFile.get_path(),
-                    temaOutput,
-                    colors
-                );
+                this.processTemplate(templateFile.get_path(), temaOutput, colors);
             }
         }
-    }
-
-    hexToRgb(hex) {
-        return ColorUtils.hexToRgb(hex);
     }
 
     processTemplate(templatePath, outputPath, colors) {
@@ -177,14 +170,11 @@ export class ThemeGenerator {
         }
 
         try {
-            const templateContent = new TextDecoder('utf-8').decode(content);
-            const processedContent = this._replaceColorPlaceholders(
-                templateContent,
-                colors
-            );
+            const templateContent = new TextDecoder().decode(content);
+            const processedContent = this._replaceColorPlaceholders(templateContent, colors);
             this._writeOutputFile(outputPath, processedContent);
 
-            print('✓ Generated:', outputPath);
+            print('Generated:', outputPath);
         } catch (error) {
             print('Error processing template:', templatePath, error.message);
         }
@@ -194,14 +184,39 @@ export class ThemeGenerator {
         let content = templateContent;
 
         for (const [key, value] of Object.entries(colors)) {
+            if (!value) continue;
+
+            // Handle {color.strip} - hex without #
             content = content.replace(
                 new RegExp(`\\{${key}\\.strip\\}`, 'g'),
-                ColorUtils.stripHash(value)
+                stripHash(value)
             );
+
+            // Handle {color.rgb} - "r g b" format
             content = content.replace(
                 new RegExp(`\\{${key}\\.rgb\\}`, 'g'),
-                this.hexToRgb(value)
+                hexToRgbString(value)
             );
+
+            // Handle {color.rgba:alpha} - rgba with custom alpha (e.g. {background.rgba:0.66})
+            content = content.replace(
+                new RegExp(`\\{${key}\\.rgba:([0-9.]+)\\}`, 'g'),
+                (_, alpha) => hexToRgba(value, parseFloat(alpha))
+            );
+
+            // Handle {color.rgba} - rgba with default alpha 1.0
+            content = content.replace(
+                new RegExp(`\\{${key}\\.rgba\\}`, 'g'),
+                hexToRgba(value, 1.0)
+            );
+
+            // Handle {color.yaru} - Yaru icon theme name
+            content = content.replace(
+                new RegExp(`\\{${key}\\.yaru\\}`, 'g'),
+                hexToYaruTheme(value)
+            );
+
+            // Handle plain {color} - hex color as-is
             content = content.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
         }
 
@@ -216,7 +231,7 @@ export class ThemeGenerator {
             outputDir.make_directory_with_parents(null);
         }
 
-        const encodedContent = new TextEncoder('utf-8').encode(content);
+        const encodedContent = new TextEncoder().encode(content);
         outputFile.replace_contents(
             encodedContent,
             null,
@@ -226,58 +241,11 @@ export class ThemeGenerator {
         );
     }
 
-    copyStaticFiles(templatesDir, temaThemeDir) {
-        const staticFiles = ['neovim.lua'];
-
-        for (const staticFile of staticFiles) {
-            const sourceFile = Gio.File.new_for_path(
-                templatesDir + '/' + staticFile
-            );
-            const destFile = Gio.File.new_for_path(
-                temaThemeDir + '/' + staticFile
-            );
-
-            if (sourceFile.query_exists(null)) {
-                try {
-                    sourceFile.copy(
-                        destFile,
-                        Gio.FileCopyFlags.OVERWRITE,
-                        null,
-                        null
-                    );
-                    print('✓ Copied static file:', staticFile);
-                } catch (error) {
-                    print(
-                        'Warning: Could not copy',
-                        staticFile,
-                        ':',
-                        error.message
-                    );
-                }
-            }
-        }
-    }
-
-    generateIconsTheme(temaThemeDir, colors) {
-        // Use color1 (the primary accent color) to determine the Yaru theme
-        const accentColor = colors.color1 || colors.color4;
-        const yaruTheme = ColorUtils.hexToYaruTheme(accentColor);
-
-        const iconsThemePath = temaThemeDir + '/icons.theme';
-
-        try {
-            this._writeOutputFile(iconsThemePath, yaruTheme + '\n');
-            print('✓ Generated icons.theme with', yaruTheme);
-        } catch (error) {
-            print('Error generating icons.theme:', error.message);
-        }
-    }
-
     handleLightMode(colors, temaThemeDir) {
+        if (!colors.background) return;
+
         const isLightMode = this._isLightMode(colors.background);
-        const lightModeFile = Gio.File.new_for_path(
-            temaThemeDir + '/light.mode'
-        );
+        const lightModeFile = Gio.File.new_for_path(temaThemeDir + '/light.mode');
 
         if (isLightMode) {
             this._createLightModeFile(lightModeFile);
@@ -287,14 +255,16 @@ export class ThemeGenerator {
     }
 
     _isLightMode(backgroundColor) {
-        const luminance = ColorUtils.calculateLuminance(backgroundColor);
+        const luminance = calculateLuminance(backgroundColor);
         return luminance > LUMINANCE_LIGHT_THRESHOLD;
     }
 
     _createLightModeFile(lightModeFile) {
         try {
-            lightModeFile.create(Gio.FileCreateFlags.NONE, null);
-            print('✓ Light mode detected - created light.mode file');
+            if (!lightModeFile.query_exists(null)) {
+                lightModeFile.create(Gio.FileCreateFlags.NONE, null);
+            }
+            print('Light mode detected - created light.mode file');
         } catch (error) {
             print('Error creating light.mode file:', error.message);
         }
@@ -307,7 +277,7 @@ export class ThemeGenerator {
 
         try {
             lightModeFile.delete(null);
-            print('✓ Dark mode detected - removed light.mode file');
+            print('Dark mode detected - removed light.mode file');
         } catch (error) {
             print('Error removing light.mode file:', error.message);
         }
@@ -328,7 +298,7 @@ export class ThemeGenerator {
             this._removeExistingBackgroundsDir(backgroundsDir);
             const backgroundsFile = Gio.File.new_for_path(backgroundsDir);
             backgroundsFile.make_symbolic_link(wallpapersDir, null);
-            print('✓ Symlinked', wallpapersDir, 'to', backgroundsDir);
+            print('Symlinked', wallpapersDir, 'to', backgroundsDir);
         } catch (error) {
             print('Error symlinking wallpapers:', error.message);
         }
@@ -361,7 +331,7 @@ export class ThemeGenerator {
 
     setOmarchyBackground(colors, configBase) {
         if (!colors.wallpaper) {
-            print('Warning: Could not determine current wallpaper from pywal');
+            print('Warning: Could not determine current wallpaper');
             return;
         }
 
@@ -387,10 +357,7 @@ export class ThemeGenerator {
         }
 
         if (!this.isImageFile(wallpaperPath)) {
-            print(
-                'Warning: File is not a recognized image format:',
-                wallpaperPath
-            );
+            print('Warning: File is not a recognized image format:', wallpaperPath);
             return false;
         }
 
@@ -399,36 +366,36 @@ export class ThemeGenerator {
 
     _createBackgroundSymlink(backgroundLink, wallpaperPath) {
         const backgroundFile = Gio.File.new_for_path(backgroundLink);
+        const parentDir = backgroundFile.get_parent();
+
+        if (!parentDir.query_exists(null)) {
+            parentDir.make_directory_with_parents(null);
+        }
 
         if (backgroundFile.query_exists(null)) {
             backgroundFile.delete(null);
         }
 
         backgroundFile.make_symbolic_link(wallpaperPath, null);
-        print('✓ Set background symlink:', wallpaperPath);
+        print('Set background symlink:', wallpaperPath);
     }
 
     applyOmarchyTheme() {
         try {
-            if (!SubprocessUtils.checkCommandExists('omarchy-theme-set')) {
-                print('Warning: omarchy-theme-set command not found');
+            if (!this._checkCommandExists('omarchy-theme-set')) {
+                print('Note: omarchy-theme-set command not found');
                 return;
             }
 
             const applyProcess = new Gio.Subprocess({
                 argv: ['omarchy-theme-set', 'tema'],
-                flags:
-                    Gio.SubprocessFlags.STDOUT_PIPE |
-                    Gio.SubprocessFlags.STDERR_PIPE,
+                flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
             });
             applyProcess.init(null);
-            const [, stdout, stderr] = applyProcess.communicate_utf8(
-                null,
-                null
-            );
+            const [, stdout, stderr] = applyProcess.communicate_utf8(null, null);
 
             if (applyProcess.get_successful()) {
-                print('✓ Omarchy tema theme applied!');
+                print('Omarchy tema theme applied!');
             } else {
                 print('Error applying Omarchy theme:', stderr);
             }
@@ -437,94 +404,49 @@ export class ThemeGenerator {
         }
     }
 
+    _checkCommandExists(command) {
+        try {
+            const proc = Gio.Subprocess.new(
+                ['which', command],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+            );
+            proc.communicate_utf8(null, null);
+            return proc.get_exit_status() === 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
     isImageFile(fileName) {
         const lowerFileName = fileName.toLowerCase();
         return IMAGE_EXTENSIONS.some(ext => lowerFileName.endsWith(ext));
     }
 
-    ejectTheme(imagePath, fileName, lightMode, outputPath) {
+    /**
+     * Ejects a standalone theme to the specified path
+     */
+    async ejectTheme(imagePath, fileName, lightMode, outputPath) {
         print(`Ejecting theme to: ${outputPath}`);
 
-        const walPath = this.app.wallpaperManager.findWalExecutable();
-        if (!walPath) {
-            this.app.showError('Error: wal not found. Please install pywal.');
-            return;
-        }
-
         const spinnerDialog = this._showEjectionSpinner();
-        this._runWalAndEject(
-            walPath,
-            imagePath,
-            lightMode,
-            outputPath,
-            spinnerDialog
-        );
-    }
 
-    _runWalAndEject(walPath, imagePath, lightMode, outputPath, spinnerDialog) {
-        const walArgs = this._buildWalArgsForEjection(
-            walPath,
-            imagePath,
-            lightMode
-        );
-        const launcher = this._createWalLauncher();
-        const walProcess = launcher.spawnv(walArgs);
-
-        walProcess.communicate_utf8_async(null, null, (source, result) => {
-            this._handleEjectionWalResult(
-                walProcess,
-                result,
-                outputPath,
-                imagePath,
-                spinnerDialog
-            );
-        });
-    }
-
-    _buildWalArgsForEjection(walPath, imagePath, lightMode) {
-        const baseArgs = [walPath, '-n', '-s', '-t', '-e', '-i', imagePath];
-        if (lightMode) {
-            baseArgs.splice(5, 0, '-l');
-        }
-        return baseArgs;
-    }
-
-    _createWalLauncher() {
-        return SubprocessUtils.createSubprocessLauncher();
-    }
-
-    _handleEjectionWalResult(
-        walProcess,
-        result,
-        outputPath,
-        imagePath,
-        spinnerDialog
-    ) {
         try {
-            const [, , walStderr] = walProcess.communicate_utf8_finish(result);
-
-            if (walProcess.get_successful()) {
-                this._processEjectedTheme(outputPath, imagePath, spinnerDialog);
-            } else {
+            const available = await checkImageMagickAvailable();
+            if (!available) {
                 spinnerDialog.destroy();
-                this.app.showError(`Error running wal: ${walStderr}`);
+                this.app.showError('ImageMagick not found. Please install ImageMagick.');
+                return;
             }
+
+            const palette = await extractColorsWithImageMagick(imagePath, lightMode);
+            const colors = paletteToColorsObject(palette, imagePath);
+
+            this._createEjectedTheme(outputPath, colors, imagePath, spinnerDialog);
         } catch (error) {
             spinnerDialog.destroy();
-            this.app.showError(`Error: ${error.message}`);
+            this.app.showError(`Error ejecting theme: ${error.message}`);
+            console.error('Theme ejection error:', error);
         }
-    }
-
-    _processEjectedTheme(outputPath, imagePath, spinnerDialog) {
-        const colors = this.readPywalColors();
-
-        if (!colors) {
-            spinnerDialog.destroy();
-            this.app.showError('Error: Could not read pywal colors');
-            return;
-        }
-
-        this._createEjectedTheme(outputPath, colors, imagePath, spinnerDialog);
     }
 
     _createEjectedTheme(outputPath, colors, imagePath, spinnerDialog) {
@@ -542,10 +464,8 @@ export class ThemeGenerator {
             this._copyWallpaperToOutput(imagePath, outputPath);
 
             spinnerDialog.destroy();
-            this.app.showSuccess(
-                `Theme ejected successfully to:\n${outputPath}`
-            );
-            print(`✓ Theme ejected to: ${outputPath}`);
+            this.app.showSuccess(`Theme ejected successfully to:\n${outputPath}`);
+            print(`Theme ejected to: ${outputPath}`);
         } catch (error) {
             spinnerDialog.destroy();
             this.app.showError(`Error creating theme: ${error.message}`);
@@ -560,9 +480,7 @@ export class ThemeGenerator {
     }
 
     _copyWallpaperToOutput(imagePath, outputPath) {
-        const backgroundsDir = Gio.File.new_for_path(
-            outputPath + '/backgrounds'
-        );
+        const backgroundsDir = Gio.File.new_for_path(outputPath + '/backgrounds');
 
         if (!backgroundsDir.query_exists(null)) {
             backgroundsDir.make_directory(null);
@@ -573,20 +491,15 @@ export class ThemeGenerator {
         const destWallpaper = Gio.File.new_for_path(
             outputPath + '/backgrounds/' + wallpaperName
         );
-        wallpaperFile.copy(
-            destWallpaper,
-            Gio.FileCopyFlags.OVERWRITE,
-            null,
-            null
-        );
+        wallpaperFile.copy(destWallpaper, Gio.FileCopyFlags.OVERWRITE, null, null);
     }
 
     _showEjectionSpinner() {
         const dialog = new Adw.MessageDialog({
             transient_for: this.app.get_active_window(),
             modal: true,
-            heading: 'Ejecting Theme...',
-            body: 'Generating colors and creating theme files...',
+            heading: 'Ejecting Theme',
+            body: 'Extracting colors and generating theme files...',
         });
 
         const spinner = new Gtk.Spinner({

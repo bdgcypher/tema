@@ -3,14 +3,17 @@ import Gdk from 'gi://Gdk';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
-import {ColorUtils} from '../utils/ColorUtils.js';
+import {hexToRgba} from '../utils/ColorUtils.js';
 
-const PYWAL_COLORS_PATH = GLib.get_home_dir() + '/.cache/wal/colors';
-const PYWAL_ACCENT_COLOR_INDEX = 2;
-const DEFAULT_DARK_BACKGROUND = 'rgba(10, 10, 20, 0.95)';
-const DEFAULT_LIGHT_BACKGROUND = 'rgba(245, 245, 250, 0.95)';
-const DEFAULT_ACCENT_COLOR = '#7aa2f7';
+const TEMA_COLORS_PATH = GLib.get_home_dir() + '/.cache/tema/colors.json';
+const DEFAULT_DARK_BG = 'rgba(24, 24, 32, 0.95)';
+const DEFAULT_LIGHT_BG = 'rgba(248, 248, 252, 0.95)';
+const DEFAULT_ACCENT = '#7aa2f7';
 
+/**
+ * TemaTheming - Handles dynamic CSS theming and color scheme detection
+ * Works with tema's own color cache (no pywal dependency)
+ */
 export class TemaTheming {
     constructor() {
         this.dynamicCssProvider = new Gtk.CssProvider();
@@ -36,14 +39,9 @@ export class TemaTheming {
             const [success, stdout] = GLib.spawn_command_line_sync(
                 'gsettings get org.gnome.desktop.interface color-scheme'
             );
-            if (!success) {
-                return true;
-            }
+            if (!success) return true;
 
-            const output = new TextDecoder()
-                .decode(stdout)
-                .trim()
-                .replace(/'/g, '');
+            const output = new TextDecoder().decode(stdout).trim().replace(/'/g, '');
             return output === 'prefer-dark';
         } catch (error) {
             print('Could not detect color scheme:', error.message);
@@ -51,100 +49,59 @@ export class TemaTheming {
         }
     }
 
-    getPywalBackgroundColor() {
-        const colors = this._readPywalColors();
-        return colors.length > 0 ? colors[0] : null;
-    }
-
-    getPywalAccentColor() {
-        const colors = this._readPywalColors();
-        return colors.length > PYWAL_ACCENT_COLOR_INDEX
-            ? colors[PYWAL_ACCENT_COLOR_INDEX]
-            : null;
-    }
-
-    _readPywalColors() {
-        const file = Gio.File.new_for_path(PYWAL_COLORS_PATH);
-        if (!file.query_exists(null)) {
-            return [];
-        }
+    _readCachedColors() {
+        const file = Gio.File.new_for_path(TEMA_COLORS_PATH);
+        if (!file.query_exists(null)) return null;
 
         try {
             const [success, contents] = file.load_contents(null);
-            if (!success) {
-                return [];
-            }
+            if (!success) return null;
 
-            const text = new TextDecoder().decode(contents);
-            return text
-                .split('\n')
-                .map(line => line.trim())
-                .filter(line => line && line.startsWith('#'));
+            const json = new TextDecoder().decode(contents);
+            return JSON.parse(json);
         } catch (error) {
-            print('Could not read pywal colors:', error.message);
-            return [];
+            print('Could not read tema colors:', error.message);
+            return null;
         }
     }
 
-    hexToRgba(hex, alpha = 0.95) {
-        return ColorUtils.hexToRgba(hex, alpha);
+    getBackgroundColor() {
+        const colors = this._readCachedColors();
+        return colors?.background || null;
+    }
+
+    getAccentColor() {
+        const colors = this._readCachedColors();
+        return colors?.color2 || colors?.color1 || null;
     }
 
     generateDynamicCSS(isDark) {
-        const backgroundColor = this._getBackgroundColor(isDark);
-        const accentColor = this._getAccentColor();
-        const boxShadow = isDark ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.15)';
+        const bgColor = this.getBackgroundColor();
+        const accentColor = this.getAccentColor();
+
+        const backgroundColor = bgColor
+            ? hexToRgba(bgColor, 0.95)
+            : isDark
+              ? DEFAULT_DARK_BG
+              : DEFAULT_LIGHT_BG;
+
+        const accent = accentColor || DEFAULT_ACCENT;
+        const shadowColor = isDark ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.1)';
 
         return `
-/* Main window background */
+/* Dynamic theming */
 window {
     background-color: ${backgroundColor};
-    box-shadow: 0 4px 20px ${boxShadow};
+    box-shadow: 0 4px 16px ${shadowColor};
 }
 
-@define-color accent_color ${accentColor};
+@define-color accent_color ${accent};
+@define-color accent_bg_color ${accent};
 `;
     }
 
-    _getBackgroundColor(isDark) {
-        const pywalBg = this.getPywalBackgroundColor();
-
-        if (pywalBg) {
-            const backgroundColor = this.hexToRgba(pywalBg, 0.95);
-            print(
-                'Using pywal background color:',
-                pywalBg,
-                '->',
-                backgroundColor
-            );
-            return backgroundColor;
-        }
-
-        const fallbackColor = isDark
-            ? DEFAULT_DARK_BACKGROUND
-            : DEFAULT_LIGHT_BACKGROUND;
-        print('Pywal color not found, using fallback:', fallbackColor);
-        return fallbackColor;
-    }
-
-    _getAccentColor() {
-        const pywalAccent = this.getPywalAccentColor();
-
-        if (pywalAccent) {
-            print('Using pywal accent color (color2):', pywalAccent);
-            return pywalAccent;
-        }
-
-        print(
-            'Pywal accent color not found, using fallback:',
-            DEFAULT_ACCENT_COLOR
-        );
-        return DEFAULT_ACCENT_COLOR;
-    }
-
     applyDynamicTheming(forceDark = null) {
-        const isDark =
-            forceDark !== null ? forceDark : this.getSystemColorScheme();
+        const isDark = forceDark !== null ? forceDark : this.getSystemColorScheme();
 
         try {
             const css = this.generateDynamicCSS(isDark);
@@ -155,7 +112,7 @@ window {
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
             );
             const mode = isDark ? 'dark' : 'light';
-            print(`✓ Dynamic theming applied (${mode} mode)`);
+            print(`Dynamic theming applied (${mode} mode)`);
         } catch (error) {
             print('Error applying dynamic theming:', error.message);
         }
