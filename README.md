@@ -1,4 +1,6 @@
-# Tema
+# Looking for maintainers. I simply do not have time to work on this project.
+
+## Tema
 
 Wallpaper-based theme generator for Hyprland/Omarchy. Extracts colors from wallpapers using ImageMagick and applies them system-wide.
 
