@@ -525,30 +525,20 @@ export class ThemeGenerator {
         return dialog;
     }
 
-    // Update Pywalfox to Sync Firefox Theme
+    // Upadte Pywalfox to Sync Firefox Theme
     _updatePywalfox() {
         try {
             print('Updating Firefox theme via Pywalfox...');
-
-            // We use GLib to safely get the home directory path
-            const homeDir = GLib.get_home_dir();
-
             const pywalfoxProcess = new Gio.Subprocess({
                 argv: ['pywalfox', 'update'],
-                // This is the fix: explicitly run the command from home
-                // so it doesn't "stay" in the pywalfox/bin directory.
-                cwd: homeDir,
                 flags: Gio.SubprocessFlags.NONE,
             });
-
             pywalfoxProcess.init(null);
-
-            // Using wait_async ensures the process closes its file handles
-            // and finishes without freezing the UI or the terminal session.
+            // We use wait_async so it doesn't freeze your UI while updating
             pywalfoxProcess.wait_async(null, (proc, res) => {
                 try {
                     proc.wait_finish(res);
-                    print('Pywalfox update complete and process closed.');
+                    print('Pywalfox update complete!');
                 } catch (e) {
                     print('Pywalfox update failed:', e.message);
                 }
