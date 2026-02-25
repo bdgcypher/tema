@@ -38,7 +38,16 @@ bindd = SUPER SHIFT, T, Tema, exec, uwsm app -- tema
 
 ## Supported Apps
 
-Generates configs for: Alacritty, Kitty, Ghostty, Waybar, Hyprland, Hyprlock, Mako, Wofi, Walker, btop, SwayOSD, GTK, Neovim (aether.nvim), Warp, Chromium
+Generates configs for: Alacritty, Kitty, Ghostty, Waybar, Hyprland, Hyprlock, Mako, Wofi, Walker, btop, SwayOSD, GTK, Neovim (aether.nvim), Warp, Chromium, Firefox (requires pywalfox firefox extension and python-pywalfox)
+
+### Pywalfox Setup (requires python3)
+1. Install the [pywalfox extension](https://addons.mozilla.org/en-US/firefox/addon/pywalfox/) in your firefox instance.
+2. Install pywalfox package using pip.
+
+```
+pip install pywalfox
+pywalfox install
+```
 
 ## Theme Ejection
 
