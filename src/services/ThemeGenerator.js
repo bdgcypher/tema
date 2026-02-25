@@ -150,6 +150,9 @@ export class ThemeGenerator {
             ['warp.yaml', temaThemeDir + '/warp.yaml'],
             ['icons.theme', temaThemeDir + '/icons.theme'],
             ['neovim.lua', temaThemeDir + '/neovim.lua'],
+            ['firefox.json', temaThemeDir + '/firefox.json'],
+            ['firefox.json', GLib.get_user_cache_dir() + '/wal/colors.json'],
+
         ];
 
         for (const [templateName, temaOutput] of templateMappings) {
