@@ -54,6 +54,7 @@ export class ThemeGenerator {
 
         print('Template generation complete!');
         this.app.temaTheming.applyDynamicTheming();
+        this._updatePywalfox();
     }
 
     /**
@@ -522,5 +523,28 @@ export class ThemeGenerator {
 
         dialog.present();
         return dialog;
+    }
+
+    // Upadte Pywalfox to Sync Firefox Theme
+    _updatePywalfox() {
+        try {
+            print('Updating Firefox theme via Pywalfox...');
+            const pywalfoxProcess = new Gio.Subprocess({
+                argv: ['pywalfox', 'update'],
+                flags: Gio.SubprocessFlags.NONE,
+            });
+            pywalfoxProcess.init(null);
+            // We use wait_async so it doesn't freeze your UI while updating
+            pywalfoxProcess.wait_async(null, (proc, res) => {
+                try {
+                    proc.wait_finish(res);
+                    print('Pywalfox update complete!');
+                } catch (e) {
+                    print('Pywalfox update failed:', e.message);
+                }
+            });
+        } catch (error) {
+            print('Error launching pywalfox:', error.message);
+        }
     }
 }
