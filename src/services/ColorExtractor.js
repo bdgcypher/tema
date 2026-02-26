@@ -14,14 +14,14 @@ const DOMINANT_COLORS_TO_EXTRACT = 64;
 const CACHE_VERSION = 1;
 
 // Color detection thresholds
-const MONOCHROME_SATURATION_THRESHOLD = 15;
-const MONOCHROME_IMAGE_THRESHOLD = 0.7;
-const LOW_DIVERSITY_THRESHOLD = 0.6;
-const SIMILAR_HUE_RANGE = 30;
-const SIMILAR_LIGHTNESS_RANGE = 20;
+const MONOCHROME_SATURATION_THRESHOLD = 12;
+const MONOCHROME_IMAGE_THRESHOLD = 0.85;
+const LOW_DIVERSITY_THRESHOLD = 0.75;
+const SIMILAR_HUE_RANGE = 25;
+const SIMILAR_LIGHTNESS_RANGE = 15;
 
 // Color quality preferences
-const MIN_CHROMATIC_SATURATION = 15;
+const MIN_CHROMATIC_SATURATION = 20;
 const TOO_DARK_THRESHOLD = 20;
 const TOO_BRIGHT_THRESHOLD = 85;
 
@@ -438,21 +438,20 @@ function findForegroundColor(colors, lightMode, usedIndices) {
 }
 
 function calculateColorScore(hsl, count, totalPixels, targetHue) {
-    const hueDiff = calculateHueDistance(hsl.h, targetHue) * 4;
-    const saturationPenalty = (100 - hsl.s) * 0.8; // Heavily favor higher saturation
+    const hueDiff = calculateHueDistance(hsl.h, targetHue) * 1.5; // Reduced from 4
+    const saturationReward = Math.pow(hsl.s, 1.5); // Heavily reward saturation
 
-    // Prominence reward: higher count = lower score
-    // totalPixels is the sum of counts in the pool
-    const prominenceReward = (count / totalPixels) * 50;
+    // Prominence is a small secondary factor
+    const prominenceReward = Math.log10(count + 1) * 5;
 
     let lightnessPenalty = 0;
     if (hsl.l < TOO_DARK_THRESHOLD) {
-        lightnessPenalty = 20;
+        lightnessPenalty = 40;
     } else if (hsl.l > TOO_BRIGHT_THRESHOLD) {
-        lightnessPenalty = 20;
+        lightnessPenalty = 40;
     }
 
-    return hueDiff + saturationPenalty - prominenceReward + lightnessPenalty;
+    return hueDiff - saturationReward - prominenceReward + lightnessPenalty;
 }
 
 function findBestColorMatch(targetHue, colorPool, usedIndices) {
@@ -556,9 +555,11 @@ function findPrimaryAccentColor(colors) {
 
     for (const color of colors) {
         const hsl = getColorHSL(color.hex);
-        // Score based on saturation and prominence
-        // We want highly saturated colors even if they aren't the absolute most frequent
-        const score = (hsl.s * 1.5) * (color.count / 100);
+        // Heavily weight saturation. Pixel count provides a small boost.
+        // Even a tiny vibrant area should win over a large dull area.
+        const saturationWeight = Math.pow(hsl.s, 2); // Quadratic scaling for saturation
+        const prominenceWeight = Math.log10(color.count + 1);
+        const score = saturationWeight * prominenceWeight;
 
         if (score > maxScore && hsl.s > MONOCHROME_SATURATION_THRESHOLD) {
             maxScore = score;
@@ -582,20 +583,44 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
     palette[0] = lightMode ? lightest.color : darkest.color;
     palette[7] = lightMode ? darkest.color : lightest.color;
 
-    // Generate ANSI colors 1-6 using the accent hue with varied lightness and saturation
-    // We'll use a spread of hues around the accent for some variety
+    // Filter potential colors from the pool that have some saturation
+    const pool = dominantColors.filter(c => getColorHSL(c.hex).s > MONOCHROME_SATURATION_THRESHOLD);
+
+    // Generate ANSI colors 1-6
     for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
-        const hueShift = (i - 2.5) * 10; // +/- 25 degrees
-        const hue = (accentHsl.h + hueShift + 360) % 360;
-        const saturation = Math.min(100, accentHsl.s + (i % 2 === 0 ? 10 : -10));
-        const lightness = 45 + (i * 5); // 45-75 range
+        const hueShift = (i - 2.5) * 12; // Spread around the accent
+        const targetHue = (accentHsl.h + hueShift + 360) % 360;
         
-        palette[i + 1] = hslToHex(hue, saturation, lightness);
+        // Try to find a real color from the background that matches this shifted hue
+        let bestMatch = -1;
+        let bestScore = Infinity;
+
+        for (let j = 0; j < pool.length; j++) {
+            const poolHsl = getColorHSL(pool[j].hex);
+            const hueDist = calculateHueDistance(poolHsl.h, targetHue);
+            // Reward vibrancy and matching hue
+            const score = hueDist * 2 - poolHsl.s;
+
+            if (score < bestScore) {
+                bestScore = score;
+                bestMatch = j;
+            }
+        }
+
+        // If we found a decent match in the pool, use it; otherwise generate
+        if (bestMatch !== -1 && bestScore < 40) {
+            palette[i + 1] = pool[bestMatch].hex;
+        } else {
+            const saturation = Math.min(100, accentHsl.s + (i % 2 === 0 ? 15 : -5));
+            const lightness = 45 + (i * 5);
+            palette[i + 1] = hslToHex(targetHue, saturation, lightness);
+        }
     }
 
+    const bgHsl = getColorHSL(palette[0]);
     const color8Lightness = lightMode
-        ? Math.max(0, lightest.lightness - 30)
-        : Math.min(100, darkest.lightness + 35);
+        ? Math.max(0, bgHsl.l - 35)
+        : Math.min(100, bgHsl.l + 40);
     palette[8] = hslToHex(accentHsl.h, accentHsl.s * 0.4, color8Lightness);
 
     for (let i = 1; i <= 6; i++) {
@@ -603,8 +628,8 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
     }
 
     palette[15] = lightMode
-        ? hslToHex(accentHsl.h, 10, Math.max(0, darkest.lightness - 5))
-        : hslToHex(accentHsl.h, 10, Math.min(100, lightest.lightness + 5));
+        ? hslToHex(accentHsl.h, 15, Math.max(0, bgHsl.l - 10))
+        : hslToHex(accentHsl.h, 15, Math.min(100, bgHsl.l + 15));
 
     return palette;
 }
