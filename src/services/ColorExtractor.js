@@ -543,8 +543,15 @@ function findPrimaryAccentColor(colors) {
 
 function generateBrightVersion(hexColor) {
   const hsl = getColorHSL(hexColor);
-  const newLightness = Math.min(100, hsl.l + BRIGHT_COLOR_LIGHTNESS_BOOST);
-  const newSaturation = Math.min(100, hsl.s * BRIGHT_COLOR_SATURATION_BOOST);
+  
+  // If yellow, accentuate with more white (higher lightness, less saturation)
+  const isYellow = hsl.h > 45 && hsl.h < 85;
+  const lightnessBoost = isYellow ? 35 : BRIGHT_COLOR_LIGHTNESS_BOOST;
+  const saturationFactor = isYellow ? 0.6 : BRIGHT_COLOR_SATURATION_BOOST;
+  
+  const newLightness = Math.min(100, hsl.l + lightnessBoost);
+  const newSaturation = isYellow ? hsl.s * saturationFactor : Math.min(100, hsl.s * saturationFactor);
+  
   return hslToHex(hsl.h, newSaturation, newLightness);
 }
 
@@ -613,9 +620,16 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
   const palette = new Array(ANSI_PALETTE_SIZE);
   palette[0] = background;
   
-  // Decouple Foreground for ANSI 7 - ensure high contrast (AA standard 4.5:1)
+  // Decouple Foreground for ANSI 7
   const fgResult = findForegroundColor(dominantColors, lightMode, new Set([bgResult.index]));
   let foreground = fgResult.color;
+  
+  // If yellow theme, favor pure white for foreground contrast in dark mode
+  const isYellowTheme = primaryAccentHsl.h > 45 && primaryAccentHsl.h < 85;
+  if (isYellowTheme && !lightMode) {
+      foreground = '#FFFFFF';
+  }
+
   if (getContrastRatio(foreground, background) < 4.5) {
       foreground = lightMode ? '#000000' : '#FFFFFF';
   }
@@ -630,7 +644,12 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
     
     // Spread hues slightly around the base accents
     const hueShift = (Math.floor(i / 2) - 1) * 15;
-    const targetHue = (currentAccentHsl.h + hueShift + 360) % 360;
+    let targetHue = (currentAccentHsl.h + hueShift + 360) % 360;
+    
+    // Inject orange into yellow themes for contrast
+    if (isYellowTheme && (i === 1 || i === 4)) {
+        targetHue = 30; // Pure Orange
+    }
     
     let selectedColor;
     let bestMatch = -1;
@@ -669,7 +688,7 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
   // Color 8: UI color
   const bgHsl = getColorHSL(background);
   const color8Lightness = lightMode ? Math.max(10, bgHsl.l - 25) : Math.min(90, bgHsl.l + 30);
-  palette[8] = hslToHex(primaryAccent.h, primaryAccentHsl.s * 0.4, color8Lightness);
+  palette[8] = hslToHex(primaryAccentHsl.h, primaryAccentHsl.s * 0.4, color8Lightness);
 
   for (let i = 1; i <= 6; i++) {
     palette[i + 8] = generateBrightVersion(palette[i]);
