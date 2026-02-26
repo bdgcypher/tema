@@ -462,6 +462,13 @@ function calculateColorScore(hsl, count, targetHue) {
   const saturationReward = Math.pow(hsl.s, 1.5); // Reward vibrancy
   const prominenceReward = Math.log10(count + 1) * 5;
 
+  // Warmth bonus: slightly favor reds (0/360), oranges (30), and yellows (60)
+  // Hue 0-90 and 330-360 are generally considered warm
+  let warmthBonus = 0;
+  if (hsl.h <= 90 || hsl.h >= 330) {
+      warmthBonus = 5; // A slight nudge
+  }
+
   let lightnessPenalty = 0;
   if (hsl.l < TOO_DARK_THRESHOLD) {
     lightnessPenalty = 30;
@@ -469,7 +476,7 @@ function calculateColorScore(hsl, count, targetHue) {
     lightnessPenalty = 30;
   }
 
-  return hueDiff - saturationReward - prominenceReward + lightnessPenalty;
+  return hueDiff - saturationReward - prominenceReward - warmthBonus + lightnessPenalty;
 }
 
 function findBestColorMatch(targetHue, colorPool, usedIndices) {
@@ -497,8 +504,12 @@ function findPrimaryAccentColor(colors) {
 
   for (const color of colors) {
     const hsl = getColorHSL(color.hex);
+    
+    // Warmth multiplier: 1.15 for warm colors, 1.0 for others
+    const warmthMult = (hsl.h <= 90 || hsl.h >= 330) ? 1.15 : 1.0;
+    
     // Quadratic saturation weight to find "striking" colors even if small
-    const score = Math.pow(hsl.s, 2) * Math.log10(color.count + 1);
+    const score = Math.pow(hsl.s, 2) * Math.log10(color.count + 1) * warmthMult;
 
     if (score > maxScore && hsl.s > MONOCHROME_SATURATION_THRESHOLD) {
       maxScore = score;
@@ -548,7 +559,9 @@ function findTopAccents(colors, maxCount = 2) {
     .filter(c => getColorHSL(c.hex).s > minSaturation)
     .map(c => {
       const hsl = getColorHSL(c.hex);
-      const score = Math.pow(hsl.s, 2) * Math.log10(c.count + 1);
+      // Warmth multiplier: 1.15 for warm colors, 1.0 for others
+      const warmthMult = (hsl.h <= 90 || hsl.h >= 330) ? 1.15 : 1.0;
+      const score = Math.pow(hsl.s, 2) * Math.log10(c.count + 1) * warmthMult;
       return { ...c, score, h: hsl.h };
     })
     .sort((a, b) => b.score - a.score);
