@@ -10,18 +10,18 @@ import System from 'system';
 
 // Constants
 const ANSI_PALETTE_SIZE = 16;
-const DOMINANT_COLORS_TO_EXTRACT = 64;
+const DOMINANT_COLORS_TO_EXTRACT = 32;
 const CACHE_VERSION = 1;
 
 // Color detection thresholds
-const MONOCHROME_SATURATION_THRESHOLD = 12;
-const MONOCHROME_IMAGE_THRESHOLD = 0.85;
-const LOW_DIVERSITY_THRESHOLD = 0.75;
-const SIMILAR_HUE_RANGE = 25;
-const SIMILAR_LIGHTNESS_RANGE = 15;
+const MONOCHROME_SATURATION_THRESHOLD = 15;
+const MONOCHROME_IMAGE_THRESHOLD = 0.7;
+const LOW_DIVERSITY_THRESHOLD = 0.6;
+const SIMILAR_HUE_RANGE = 30;
+const SIMILAR_LIGHTNESS_RANGE = 20;
 
 // Color quality preferences
-const MIN_CHROMATIC_SATURATION = 20;
+const MIN_CHROMATIC_SATURATION = 15;
 const TOO_DARK_THRESHOLD = 20;
 const TOO_BRIGHT_THRESHOLD = 85;
 
@@ -325,7 +325,7 @@ function parseHistogramOutput(output) {
     }
 
     colorData.sort((a, b) => b.count - a.count);
-    return colorData;
+    return colorData.map(c => c.hex);
 }
 
 // ============================================================================
@@ -350,39 +350,53 @@ function calculateHueDistance(hue1, hue2) {
 }
 
 function isMonochromeImage(colors) {
-    let totalPixels = 0;
-    let lowSaturationPixels = 0;
+    let lowSaturationCount = 0;
 
     for (const color of colors) {
-        totalPixels += color.count;
-        const hsl = getColorHSL(color.hex);
+        const hsl = getColorHSL(color);
         if (hsl.s < MONOCHROME_SATURATION_THRESHOLD) {
-            lowSaturationPixels += color.count;
+            lowSaturationCount++;
         }
     }
 
-    return lowSaturationPixels / totalPixels > MONOCHROME_IMAGE_THRESHOLD;
+    return lowSaturationCount / colors.length > MONOCHROME_IMAGE_THRESHOLD;
 }
 
 function hasLowColorDiversity(colors) {
-    const totalPixels = colors.reduce((sum, c) => sum + c.count, 0);
-    const chromaticColors = colors.filter(c => getColorHSL(c.hex).s >= MONOCHROME_SATURATION_THRESHOLD);
-    
-    if (chromaticColors.length === 0) return true;
+    const hslColors = colors.map(color => {
+        const hsl = getColorHSL(color);
+        return {hue: hsl.h, saturation: hsl.s, lightness: hsl.l};
+    });
 
-    let dominantHue = -1;
-    let maxCount = 0;
+    let similarCount = 0;
+    let totalComparisons = 0;
 
-    // Find the most dominant hue cluster
-    const hueClusters = new Array(12).fill(0); // 30 degree buckets
-    for (const color of chromaticColors) {
-        const hsl = getColorHSL(color.hex);
-        const bucket = Math.floor(hsl.h / 30) % 12;
-        hueClusters[bucket] += color.count;
+    for (let i = 0; i < hslColors.length; i++) {
+        for (let j = i + 1; j < hslColors.length; j++) {
+            const color1 = hslColors[i];
+            const color2 = hslColors[j];
+
+            if (
+                color1.saturation < MONOCHROME_SATURATION_THRESHOLD ||
+                color2.saturation < MONOCHROME_SATURATION_THRESHOLD
+            ) {
+                continue;
+            }
+
+            totalComparisons++;
+
+            const hueDiff = calculateHueDistance(color1.hue, color2.hue);
+            const lightnessDiff = Math.abs(color1.lightness - color2.lightness);
+
+            if (hueDiff < SIMILAR_HUE_RANGE && lightnessDiff < SIMILAR_LIGHTNESS_RANGE) {
+                similarCount++;
+            }
+        }
     }
 
-    const maxHuePixels = Math.max(...hueClusters);
-    return maxHuePixels / totalPixels > LOW_DIVERSITY_THRESHOLD;
+    if (totalComparisons === 0) return false;
+
+    return similarCount / totalComparisons > LOW_DIVERSITY_THRESHOLD;
 }
 
 // ============================================================================
@@ -394,7 +408,7 @@ function findBackgroundColor(colors, lightMode) {
     let bgLightness = lightMode ? -1 : 101;
 
     for (let i = 0; i < colors.length; i++) {
-        const hsl = getColorHSL(colors[i].hex);
+        const hsl = getColorHSL(colors[i]);
 
         if (lightMode) {
             if (hsl.l > bgLightness) {
@@ -409,7 +423,7 @@ function findBackgroundColor(colors, lightMode) {
         }
     }
 
-    return {color: colors[bgIndex].hex, index: bgIndex};
+    return {color: colors[bgIndex], index: bgIndex};
 }
 
 function findForegroundColor(colors, lightMode, usedIndices) {
@@ -419,7 +433,7 @@ function findForegroundColor(colors, lightMode, usedIndices) {
     for (let i = 0; i < colors.length; i++) {
         if (usedIndices.has(i)) continue;
 
-        const hsl = getColorHSL(colors[i].hex);
+        const hsl = getColorHSL(colors[i]);
 
         if (lightMode) {
             if (hsl.l < fgLightness) {
@@ -434,37 +448,33 @@ function findForegroundColor(colors, lightMode, usedIndices) {
         }
     }
 
-    return {color: colors[fgIndex].hex, index: fgIndex};
+    return {color: colors[fgIndex], index: fgIndex};
 }
 
-function calculateColorScore(hsl, count, totalPixels, targetHue) {
-    const hueDiff = calculateHueDistance(hsl.h, targetHue) * 1.5; // Reduced from 4
-    const saturationReward = Math.pow(hsl.s, 1.5); // Heavily reward saturation
-
-    // Prominence is a small secondary factor
-    const prominenceReward = Math.log10(count + 1) * 5;
+function calculateColorScore(hsl, targetHue) {
+    const hueDiff = calculateHueDistance(hsl.h, targetHue) * 3;
+    const saturationPenalty = hsl.s < MIN_CHROMATIC_SATURATION ? 50 : 0;
+    const saturationReward = (100 - hsl.s) / 2;
 
     let lightnessPenalty = 0;
     if (hsl.l < TOO_DARK_THRESHOLD) {
-        lightnessPenalty = 40;
+        lightnessPenalty = 10;
     } else if (hsl.l > TOO_BRIGHT_THRESHOLD) {
-        lightnessPenalty = 40;
+        lightnessPenalty = 10;
     }
 
-    return hueDiff - saturationReward - prominenceReward + lightnessPenalty;
+    return hueDiff + saturationPenalty + saturationReward + lightnessPenalty;
 }
 
 function findBestColorMatch(targetHue, colorPool, usedIndices) {
     let bestIndex = -1;
     let bestScore = Infinity;
 
-    const totalPixels = colorPool.reduce((sum, c) => sum + c.count, 0);
-
     for (let i = 0; i < colorPool.length; i++) {
         if (usedIndices.has(i)) continue;
 
-        const hsl = getColorHSL(colorPool[i].hex);
-        const score = calculateColorScore(hsl, colorPool[i].count, totalPixels, targetHue);
+        const hsl = getColorHSL(colorPool[i]);
+        const score = calculateColorScore(hsl, targetHue);
 
         if (score < bestScore) {
             bestScore = score;
@@ -494,9 +504,8 @@ function adjustColorLightness(hexColor, targetLightness) {
 function sortColorsByLightness(colors) {
     return colors
         .map(color => {
-            const hex = typeof color === 'string' ? color : color.hex;
-            const hsl = getColorHSL(hex);
-            return {color: hex, lightness: hsl.l, hue: hsl.h};
+            const hsl = getColorHSL(color);
+            return {color, lightness: hsl.l, hue: hsl.h};
         })
         .sort((a, b) => a.lightness - b.lightness);
 }
@@ -511,11 +520,11 @@ function generateSubtleBalancedPalette(dominantColors, lightMode) {
     const lightest = sortedByLightness[sortedByLightness.length - 1];
 
     const chromaticColors = dominantColors.filter(
-        c => getColorHSL(c.hex).s > MONOCHROME_SATURATION_THRESHOLD
+        c => getColorHSL(c).s > MONOCHROME_SATURATION_THRESHOLD
     );
     const avgHue =
         chromaticColors.length > 0
-            ? chromaticColors.reduce((sum, c) => sum + getColorHSL(c.hex).h, 0) /
+            ? chromaticColors.reduce((sum, c) => sum + getColorHSL(c).h, 0) /
               chromaticColors.length
             : darkest.hue;
 
@@ -545,91 +554,6 @@ function generateSubtleBalancedPalette(dominantColors, lightMode) {
     palette[15] = lightMode
         ? hslToHex(avgHue, SUBTLE_PALETTE_SATURATION * 0.3, Math.max(0, darkest.lightness - 5))
         : hslToHex(avgHue, SUBTLE_PALETTE_SATURATION * 0.3, Math.min(100, lightest.lightness + 5));
-
-    return palette;
-}
-
-function findPrimaryAccentColor(colors) {
-    let bestAccent = null;
-    let maxScore = -1;
-
-    for (const color of colors) {
-        const hsl = getColorHSL(color.hex);
-        // Heavily weight saturation. Pixel count provides a small boost.
-        // Even a tiny vibrant area should win over a large dull area.
-        const saturationWeight = Math.pow(hsl.s, 2); // Quadratic scaling for saturation
-        const prominenceWeight = Math.log10(color.count + 1);
-        const score = saturationWeight * prominenceWeight;
-
-        if (score > maxScore && hsl.s > MONOCHROME_SATURATION_THRESHOLD) {
-            maxScore = score;
-            bestAccent = color;
-        }
-    }
-
-    return bestAccent;
-}
-
-function generateAccentBasedPalette(dominantColors, lightMode) {
-    const accent = findPrimaryAccentColor(dominantColors);
-    const accentHsl = accent ? getColorHSL(accent.hex) : {h: 0, s: 0, l: 50};
-    
-    const sortedByLightness = sortColorsByLightness(dominantColors);
-    const darkest = sortedByLightness[0];
-    const lightest = sortedByLightness[sortedByLightness.length - 1];
-
-    const palette = new Array(ANSI_PALETTE_SIZE);
-
-    palette[0] = lightMode ? lightest.color : darkest.color;
-    palette[7] = lightMode ? darkest.color : lightest.color;
-
-    // Filter potential colors from the pool that have some saturation
-    const pool = dominantColors.filter(c => getColorHSL(c.hex).s > MONOCHROME_SATURATION_THRESHOLD);
-
-    // Generate ANSI colors 1-6
-    for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
-        const hueShift = (i - 2.5) * 12; // Spread around the accent
-        const targetHue = (accentHsl.h + hueShift + 360) % 360;
-        
-        // Try to find a real color from the background that matches this shifted hue
-        let bestMatch = -1;
-        let bestScore = Infinity;
-
-        for (let j = 0; j < pool.length; j++) {
-            const poolHsl = getColorHSL(pool[j].hex);
-            const hueDist = calculateHueDistance(poolHsl.h, targetHue);
-            // Reward vibrancy and matching hue
-            const score = hueDist * 2 - poolHsl.s;
-
-            if (score < bestScore) {
-                bestScore = score;
-                bestMatch = j;
-            }
-        }
-
-        // If we found a decent match in the pool, use it; otherwise generate
-        if (bestMatch !== -1 && bestScore < 40) {
-            palette[i + 1] = pool[bestMatch].hex;
-        } else {
-            const saturation = Math.min(100, accentHsl.s + (i % 2 === 0 ? 15 : -5));
-            const lightness = 45 + (i * 5);
-            palette[i + 1] = hslToHex(targetHue, saturation, lightness);
-        }
-    }
-
-    const bgHsl = getColorHSL(palette[0]);
-    const color8Lightness = lightMode
-        ? Math.max(0, bgHsl.l - 35)
-        : Math.min(100, bgHsl.l + 40);
-    palette[8] = hslToHex(accentHsl.h, accentHsl.s * 0.4, color8Lightness);
-
-    for (let i = 1; i <= 6; i++) {
-        palette[i + 8] = generateBrightVersion(palette[i]);
-    }
-
-    palette[15] = lightMode
-        ? hslToHex(accentHsl.h, 15, Math.max(0, bgHsl.l - 10))
-        : hslToHex(accentHsl.h, 15, Math.min(100, bgHsl.l + 15));
 
     return palette;
 }
@@ -701,7 +625,7 @@ function generateChromaticPalette(dominantColors, lightMode) {
 
     for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
         const matchIndex = findBestColorMatch(ANSI_HUE_ARRAY[i], dominantColors, usedIndices);
-        palette[i + 1] = dominantColors[matchIndex].hex;
+        palette[i + 1] = dominantColors[matchIndex];
         usedIndices.add(matchIndex);
     }
 
@@ -838,15 +762,12 @@ export async function extractColorsWithImageMagick(imagePath, lightMode = false)
 
         let palette;
 
-        const isMonochrome = isMonochromeImage(dominantColors);
-        const accentColor = findPrimaryAccentColor(dominantColors);
-
-        if (isMonochrome && !accentColor) {
+        if (isMonochromeImage(dominantColors)) {
             print('Detected monochrome/grayscale image - generating grayscale palette');
             palette = generateMonochromePalette(dominantColors, lightMode);
-        } else if (isMonochrome || hasLowColorDiversity(dominantColors)) {
-            print('Detected accent-heavy or low diversity image - generating accent-based palette');
-            palette = generateAccentBasedPalette(dominantColors, lightMode);
+        } else if (hasLowColorDiversity(dominantColors)) {
+            print('Detected low color diversity - generating subtle balanced palette');
+            palette = generateSubtleBalancedPalette(dominantColors, lightMode);
         } else {
             print('Detected diverse chromatic image - generating vibrant colorful palette');
             palette = generateChromaticPalette(dominantColors, lightMode);
