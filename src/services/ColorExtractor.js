@@ -429,7 +429,18 @@ function findBackgroundColor(colors, lightMode) {
     }
   }
 
-  return {color: colors[bgIndex].hex, index: bgIndex};
+  let color = colors[bgIndex].hex;
+  const hsl = getColorHSL(color);
+
+  // Mute purple backgrounds (approx 260-320 degrees)
+  if (hsl.h >= 260 && hsl.h <= 320 && hsl.s > 10) {
+      // Treat as dark grayish blue or black
+      const newHue = 220; // Shift towards blue
+      const newSat = Math.min(hsl.s, 15); // Heavily mute saturation
+      color = hslToHex(newHue, newSat, hsl.l);
+  }
+
+  return {color, index: bgIndex};
 }
 
 function findForegroundColor(colors, lightMode, usedIndices) {
@@ -462,11 +473,12 @@ function calculateColorScore(hsl, count, targetHue) {
   const saturationReward = Math.pow(hsl.s, 1.5); // Reward vibrancy
   const prominenceReward = Math.log10(count + 1) * 5;
 
-  // Warmth bonus: slightly favor reds (0/360), oranges (30), and yellows (60)
-  // Hue 0-90 and 330-360 are generally considered warm
+  // Warmth bonus: favor reds/oranges (345-45) more than yellows (45-90)
   let warmthBonus = 0;
-  if (hsl.h <= 90 || hsl.h >= 330) {
-      warmthBonus = 5; // A slight nudge
+  if (hsl.h >= 345 || hsl.h <= 45) {
+      warmthBonus = 8; // Highest bias for red/orange
+  } else if (hsl.h > 45 && hsl.h <= 90) {
+      warmthBonus = 4; // Moderate bias for yellow
   }
 
   let lightnessPenalty = 0;
@@ -505,8 +517,13 @@ function findPrimaryAccentColor(colors) {
   for (const color of colors) {
     const hsl = getColorHSL(color.hex);
     
-    // Warmth multiplier: 1.15 for warm colors, 1.0 for others
-    const warmthMult = (hsl.h <= 90 || hsl.h >= 330) ? 1.15 : 1.0;
+    // Warmth multiplier: favor red/orange (1.25x) over yellow (1.1x)
+    let warmthMult = 1.0;
+    if (hsl.h >= 345 || hsl.h <= 45) {
+        warmthMult = 1.25;
+    } else if (hsl.h > 45 && hsl.h <= 90) {
+        warmthMult = 1.1;
+    }
     
     // Quadratic saturation weight to find "striking" colors even if small
     const score = Math.pow(hsl.s, 2) * Math.log10(color.count + 1) * warmthMult;
@@ -559,8 +576,13 @@ function findTopAccents(colors, maxCount = 2) {
     .filter(c => getColorHSL(c.hex).s > minSaturation)
     .map(c => {
       const hsl = getColorHSL(c.hex);
-      // Warmth multiplier: 1.15 for warm colors, 1.0 for others
-      const warmthMult = (hsl.h <= 90 || hsl.h >= 330) ? 1.15 : 1.0;
+      // Warmth multiplier: favor red/orange (1.25x) over yellow (1.1x)
+      let warmthMult = 1.0;
+      if (hsl.h >= 345 || hsl.h <= 45) {
+          warmthMult = 1.25;
+      } else if (hsl.h > 45 && hsl.h <= 90) {
+          warmthMult = 1.1;
+      }
       const score = Math.pow(hsl.s, 2) * Math.log10(c.count + 1) * warmthMult;
       return { ...c, score, h: hsl.h };
     })
