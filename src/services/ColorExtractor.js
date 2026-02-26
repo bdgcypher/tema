@@ -539,30 +539,64 @@ function sortColorsByLightness(colors) {
 // PALETTE GENERATORS
 // ============================================================================
 
+function findTopAccents(colors, maxCount = 2) {
+  const accents = [];
+  const minSaturation = MONOCHROME_SATURATION_THRESHOLD + 5;
+
+  // Clone and sort by the same logic as findPrimaryAccentColor
+  const scored = colors
+    .filter(c => getColorHSL(c.hex).s > minSaturation)
+    .map(c => {
+      const hsl = getColorHSL(c.hex);
+      const score = Math.pow(hsl.s, 2) * Math.log10(c.count + 1);
+      return { ...c, score, h: hsl.h };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  for (const candidate of scored) {
+    if (accents.length >= maxCount) break;
+
+    // Ensure accents are distinct in hue
+    const isDistinct = accents.every(a => calculateHueDistance(a.h, candidate.h) > 60);
+    if (isDistinct) {
+      accents.push(candidate);
+    }
+  }
+
+  return accents;
+}
+
 function generateAccentBasedPalette(dominantColors, lightMode) {
-  const accent = findPrimaryAccentColor(dominantColors);
-  const accentHsl = accent ? getColorHSL(accent.hex) : {h: 0, s: 0, l: 50};
+  const accents = findTopAccents(dominantColors, 2);
+  const primaryAccent = accents[0] || { hex: '#00FF00', h: 120 };
+  const secondaryAccent = accents[1] || primaryAccent;
   
   const bgResult = findBackgroundColor(dominantColors, lightMode);
   const background = bgResult.color;
 
   const palette = new Array(ANSI_PALETTE_SIZE);
-
   palette[0] = background;
   
-  // Decouple Foreground for ANSI 7
+  // Decouple Foreground for ANSI 7 - ensure high contrast (AA standard 4.5:1)
   const fgResult = findForegroundColor(dominantColors, lightMode, new Set([bgResult.index]));
-  palette[7] = fgResult.color;
+  let foreground = fgResult.color;
+  if (getContrastRatio(foreground, background) < 4.5) {
+      foreground = lightMode ? '#000000' : '#FFFFFF';
+  }
+  palette[7] = foreground;
 
-  // Pool of real colors from image
   const pool = dominantColors.filter(c => getColorHSL(c.hex).s > MONOCHROME_SATURATION_THRESHOLD);
 
-  // Generate ANSI colors 1-6 using the accent hue with varied lightness and saturation
-  for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
-    const hueShift = (i - 2.5) * 15; // Spread around the accent
+  // Generate ANSI colors 1-6
+  for (let i = 0; i < 6; i++) {
+    const baseAccent = (i % 2 === 0) ? primaryAccent : secondaryAccent;
+    const accentHsl = getColorHSL(baseAccent.hex);
+    
+    // Spread hues slightly around the base accents
+    const hueShift = (Math.floor(i / 2) - 1) * 15;
     const targetHue = (accentHsl.h + hueShift + 360) % 360;
     
-    // Try to find a real color from the background that matches this shifted hue
+    let selectedColor;
     let bestMatch = -1;
     let bestScore = Infinity;
 
@@ -577,26 +611,20 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
       }
     }
 
-    // Use image color if it exists and has enough contrast, otherwise generate
-    let selectedColor;
-    if (bestMatch !== -1 && bestScore < 40 && getContrastRatio(pool[bestMatch].hex, background) >= 3.0) {
+    if (bestMatch !== -1 && bestScore < 30 && getContrastRatio(pool[bestMatch].hex, background) >= 4.5) {
       selectedColor = pool[bestMatch].hex;
     } else {
-      // Generate accessible variant
-      let lightness = lightMode ? 40 : 60;
-      selectedColor = hslToHex(targetHue, accentHsl.s, lightness);
+      // Procedural generation with strict contrast enforcement
+      let lightness = lightMode ? 35 : 65;
+      selectedColor = hslToHex(targetHue, Math.max(accentHsl.s, 40), lightness);
       
-      // Fine-tune lightness for contrast
-      while (getContrastRatio(selectedColor, background) < 3.0) {
+      let attempts = 0;
+      while (getContrastRatio(selectedColor, background) < 4.5 && attempts < 10) {
           const hsl = getColorHSL(selectedColor);
-          if (lightMode) {
-              if (hsl.l <= 10) break;
-              lightness -= 5;
-          } else {
-              if (hsl.l >= 90) break;
-              lightness += 5;
-          }
+          lightness += lightMode ? -5 : 5;
+          if (lightness < 5 || lightness > 95) break;
           selectedColor = hslToHex(hsl.h, hsl.s, lightness);
+          attempts++;
       }
     }
     palette[i + 1] = selectedColor;
@@ -604,8 +632,8 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
 
   // Color 8: UI color
   const bgHsl = getColorHSL(background);
-  const color8Lightness = lightMode ? Math.max(0, bgHsl.l - 30) : Math.min(100, bgHsl.l + 35);
-  palette[8] = hslToHex(accentHsl.h, accentHsl.s * 0.4, color8Lightness);
+  const color8Lightness = lightMode ? Math.max(10, bgHsl.l - 25) : Math.min(90, bgHsl.l + 30);
+  palette[8] = hslToHex(primaryAccent.h, accentHsl.s * 0.4, color8Lightness);
 
   for (let i = 1; i <= 6; i++) {
     palette[i + 8] = generateBrightVersion(palette[i]);
