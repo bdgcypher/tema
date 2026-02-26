@@ -325,7 +325,31 @@ function parseHistogramOutput(output) {
   }
 
   colorData.sort((a, b) => b.count - a.count);
-  return colorData.map(c => c.hex);
+  return colorData;
+}
+
+/**
+ * Calculates relative luminance for WCAG contrast
+ */
+function getRelativeLuminance(r, g, b) {
+    const [rs, gs, bs] = [r, g, b].map(c => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+}
+
+/**
+ * Calculates contrast ratio between two hex colors
+ */
+function getContrastRatio(hex1, hex2) {
+    const rgb1 = hexToRgb(hex1);
+    const rgb2 = hexToRgb(hex2);
+    const lum1 = getRelativeLuminance(rgb1.r, rgb1.g, rgb1.b);
+    const lum2 = getRelativeLuminance(rgb2.r, rgb2.g, rgb2.b);
+    const brightest = Math.max(lum1, lum2);
+    const darkest = Math.min(lum1, lum2);
+    return (brightest + 0.05) / (darkest + 0.05);
 }
 
 // ============================================================================
@@ -350,53 +374,35 @@ function calculateHueDistance(hue1, hue2) {
 }
 
 function isMonochromeImage(colors) {
-  let lowSaturationCount = 0;
+  let totalPixels = 0;
+  let lowSaturationPixels = 0;
 
   for (const color of colors) {
-    const hsl = getColorHSL(color);
+    totalPixels += color.count;
+    const hsl = getColorHSL(color.hex);
     if (hsl.s < MONOCHROME_SATURATION_THRESHOLD) {
-      lowSaturationCount++;
+      lowSaturationPixels += color.count;
     }
   }
 
-  return lowSaturationCount / colors.length > MONOCHROME_IMAGE_THRESHOLD;
+  return lowSaturationPixels / totalPixels > MONOCHROME_IMAGE_THRESHOLD;
 }
 
 function hasLowColorDiversity(colors) {
-  const hslColors = colors.map(color => {
-    const hsl = getColorHSL(color);
-    return {hue: hsl.h, saturation: hsl.s, lightness: hsl.l};
-  });
+  const totalPixels = colors.reduce((sum, c) => sum + c.count, 0);
+  const chromaticColors = colors.filter(c => getColorHSL(c.hex).s >= MONOCHROME_SATURATION_THRESHOLD);
+  
+  if (chromaticColors.length === 0) return true;
 
-  let similarCount = 0;
-  let totalComparisons = 0;
-
-  for (let i = 0; i < hslColors.length; i++) {
-    for (let j = i + 1; j < hslColors.length; j++) {
-      const color1 = hslColors[i];
-      const color2 = hslColors[j];
-
-      if (
-        color1.saturation < MONOCHROME_SATURATION_THRESHOLD ||
-        color2.saturation < MONOCHROME_SATURATION_THRESHOLD
-      ) {
-        continue;
-      }
-
-      totalComparisons++;
-
-      const hueDiff = calculateHueDistance(color1.hue, color2.hue);
-      const lightnessDiff = Math.abs(color1.lightness - color2.lightness);
-
-      if (hueDiff < SIMILAR_HUE_RANGE && lightnessDiff < SIMILAR_LIGHTNESS_RANGE) {
-        similarCount++;
-      }
-    }
+  const hueClusters = new Array(12).fill(0); // 30 degree buckets
+  for (const color of chromaticColors) {
+    const hsl = getColorHSL(color.hex);
+    const bucket = Math.floor(hsl.h / 30) % 12;
+    hueClusters[bucket] += color.count;
   }
 
-  if (totalComparisons === 0) return false;
-
-  return similarCount / totalComparisons > LOW_DIVERSITY_THRESHOLD;
+  const maxHuePixels = Math.max(...hueClusters);
+  return maxHuePixels / totalPixels > LOW_DIVERSITY_THRESHOLD;
 }
 
 // ============================================================================
@@ -408,7 +414,7 @@ function findBackgroundColor(colors, lightMode) {
   let bgLightness = lightMode ? -1 : 101;
 
   for (let i = 0; i < colors.length; i++) {
-    const hsl = getColorHSL(colors[i]);
+    const hsl = getColorHSL(colors[i].hex);
 
     if (lightMode) {
       if (hsl.l > bgLightness) {
@@ -423,7 +429,7 @@ function findBackgroundColor(colors, lightMode) {
     }
   }
 
-  return {color: colors[bgIndex], index: bgIndex};
+  return {color: colors[bgIndex].hex, index: bgIndex};
 }
 
 function findForegroundColor(colors, lightMode, usedIndices) {
@@ -433,7 +439,7 @@ function findForegroundColor(colors, lightMode, usedIndices) {
   for (let i = 0; i < colors.length; i++) {
     if (usedIndices.has(i)) continue;
 
-    const hsl = getColorHSL(colors[i]);
+    const hsl = getColorHSL(colors[i].hex);
 
     if (lightMode) {
       if (hsl.l < fgLightness) {
@@ -448,22 +454,22 @@ function findForegroundColor(colors, lightMode, usedIndices) {
     }
   }
 
-  return {color: colors[fgIndex], index: fgIndex};
+  return {color: colors[fgIndex].hex, index: fgIndex};
 }
 
-function calculateColorScore(hsl, targetHue) {
-  const hueDiff = calculateHueDistance(hsl.h, targetHue) * 3;
-  const saturationPenalty = hsl.s < MIN_CHROMATIC_SATURATION ? 50 : 0;
-  const saturationReward = (100 - hsl.s) / 2;
+function calculateColorScore(hsl, count, targetHue) {
+  const hueDiff = calculateHueDistance(hsl.h, targetHue) * 1.5;
+  const saturationReward = Math.pow(hsl.s, 1.5); // Reward vibrancy
+  const prominenceReward = Math.log10(count + 1) * 5;
 
   let lightnessPenalty = 0;
   if (hsl.l < TOO_DARK_THRESHOLD) {
-    lightnessPenalty = 10;
+    lightnessPenalty = 30;
   } else if (hsl.l > TOO_BRIGHT_THRESHOLD) {
-    lightnessPenalty = 10;
+    lightnessPenalty = 30;
   }
 
-  return hueDiff + saturationPenalty + saturationReward + lightnessPenalty;
+  return hueDiff - saturationReward - prominenceReward + lightnessPenalty;
 }
 
 function findBestColorMatch(targetHue, colorPool, usedIndices) {
@@ -473,8 +479,8 @@ function findBestColorMatch(targetHue, colorPool, usedIndices) {
   for (let i = 0; i < colorPool.length; i++) {
     if (usedIndices.has(i)) continue;
 
-    const hsl = getColorHSL(colorPool[i]);
-    const score = calculateColorScore(hsl, targetHue);
+    const hsl = getColorHSL(colorPool[i].hex);
+    const score = calculateColorScore(hsl, colorPool[i].count, targetHue);
 
     if (score < bestScore) {
       bestScore = score;
@@ -483,6 +489,24 @@ function findBestColorMatch(targetHue, colorPool, usedIndices) {
   }
 
   return bestIndex !== -1 ? bestIndex : 0;
+}
+
+function findPrimaryAccentColor(colors) {
+  let bestAccent = null;
+  let maxScore = -1;
+
+  for (const color of colors) {
+    const hsl = getColorHSL(color.hex);
+    // Quadratic saturation weight to find "striking" colors even if small
+    const score = Math.pow(hsl.s, 2) * Math.log10(color.count + 1);
+
+    if (score > maxScore && hsl.s > MONOCHROME_SATURATION_THRESHOLD) {
+      maxScore = score;
+      bestAccent = color;
+    }
+  }
+
+  return bestAccent;
 }
 
 // ============================================================================
@@ -504,8 +528,9 @@ function adjustColorLightness(hexColor, targetLightness) {
 function sortColorsByLightness(colors) {
   return colors
     .map(color => {
-      const hsl = getColorHSL(color);
-      return {color, lightness: hsl.l, hue: hsl.h};
+      const hex = typeof color === 'string' ? color : color.hex;
+      const hsl = getColorHSL(hex);
+      return {color: hex, lightness: hsl.l, hue: hsl.h};
     })
     .sort((a, b) => a.lightness - b.lightness);
 }
@@ -514,17 +539,94 @@ function sortColorsByLightness(colors) {
 // PALETTE GENERATORS
 // ============================================================================
 
+function generateAccentBasedPalette(dominantColors, lightMode) {
+  const accent = findPrimaryAccentColor(dominantColors);
+  const accentHsl = accent ? getColorHSL(accent.hex) : {h: 0, s: 0, l: 50};
+  
+  const bgResult = findBackgroundColor(dominantColors, lightMode);
+  const background = bgResult.color;
+
+  const palette = new Array(ANSI_PALETTE_SIZE);
+
+  palette[0] = background;
+  
+  // Decouple Foreground for ANSI 7
+  const fgResult = findForegroundColor(dominantColors, lightMode, new Set([bgResult.index]));
+  palette[7] = fgResult.color;
+
+  // Pool of real colors from image
+  const pool = dominantColors.filter(c => getColorHSL(c.hex).s > MONOCHROME_SATURATION_THRESHOLD);
+
+  // Generate ANSI colors 1-6 using the accent hue with varied lightness and saturation
+  for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
+    const hueShift = (i - 2.5) * 15; // Spread around the accent
+    const targetHue = (accentHsl.h + hueShift + 360) % 360;
+    
+    // Try to find a real color from the background that matches this shifted hue
+    let bestMatch = -1;
+    let bestScore = Infinity;
+
+    for (let j = 0; j < pool.length; j++) {
+      const poolHsl = getColorHSL(pool[j].hex);
+      const hueDist = calculateHueDistance(poolHsl.h, targetHue);
+      const score = hueDist * 2 - poolHsl.s;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestMatch = j;
+      }
+    }
+
+    // Use image color if it exists and has enough contrast, otherwise generate
+    let selectedColor;
+    if (bestMatch !== -1 && bestScore < 40 && getContrastRatio(pool[bestMatch].hex, background) >= 3.0) {
+      selectedColor = pool[bestMatch].hex;
+    } else {
+      // Generate accessible variant
+      let lightness = lightMode ? 40 : 60;
+      selectedColor = hslToHex(targetHue, accentHsl.s, lightness);
+      
+      // Fine-tune lightness for contrast
+      while (getContrastRatio(selectedColor, background) < 3.0) {
+          const hsl = getColorHSL(selectedColor);
+          if (lightMode) {
+              if (hsl.l <= 10) break;
+              lightness -= 5;
+          } else {
+              if (hsl.l >= 90) break;
+              lightness += 5;
+          }
+          selectedColor = hslToHex(hsl.h, hsl.s, lightness);
+      }
+    }
+    palette[i + 1] = selectedColor;
+  }
+
+  // Color 8: UI color
+  const bgHsl = getColorHSL(background);
+  const color8Lightness = lightMode ? Math.max(0, bgHsl.l - 30) : Math.min(100, bgHsl.l + 35);
+  palette[8] = hslToHex(accentHsl.h, accentHsl.s * 0.4, color8Lightness);
+
+  for (let i = 1; i <= 6; i++) {
+    palette[i + 8] = generateBrightVersion(palette[i]);
+  }
+
+  palette[15] = generateBrightVersion(palette[7]);
+
+  return palette;
+}
+
 function generateSubtleBalancedPalette(dominantColors, lightMode) {
   const sortedByLightness = sortColorsByLightness(dominantColors);
   const darkest = sortedByLightness[0];
   const lightest = sortedByLightness[sortedByLightness.length - 1];
 
   const chromaticColors = dominantColors.filter(
-    c => getColorHSL(c).s > MONOCHROME_SATURATION_THRESHOLD
+    c => getColorHSL(c.hex).s > MONOCHROME_SATURATION_THRESHOLD
   );
   const avgHue =
     chromaticColors.length > 0
-      ? chromaticColors.reduce((sum, c) => sum + getColorHSL(c).h, 0) /
+      ? chromaticColors.reduce((sum, c) => sum + getColorHSL(c.hex).h, 0) /
         chromaticColors.length
       : darkest.hue;
 
@@ -613,24 +715,26 @@ function generateMonochromePalette(grayColors, lightMode) {
 }
 
 function generateChromaticPalette(dominantColors, lightMode) {
-  const background = findBackgroundColor(dominantColors, lightMode);
-  const usedIndices = new Set([background.index]);
+  const backgroundResult = findBackgroundColor(dominantColors, lightMode);
+  const background = backgroundResult.color;
+  const usedIndices = new Set([backgroundResult.index]);
 
-  const foreground = findForegroundColor(dominantColors, lightMode, usedIndices);
-  usedIndices.add(foreground.index);
+  const foregroundResult = findForegroundColor(dominantColors, lightMode, usedIndices);
+  const foreground = foregroundResult.color;
+  usedIndices.add(foregroundResult.index);
 
   const palette = new Array(ANSI_PALETTE_SIZE);
-  palette[0] = background.color;
-  palette[7] = foreground.color;
+  palette[0] = background;
+  palette[7] = foreground;
 
   for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
     const matchIndex = findBestColorMatch(ANSI_HUE_ARRAY[i], dominantColors, usedIndices);
-    palette[i + 1] = dominantColors[matchIndex];
+    palette[i + 1] = dominantColors[matchIndex].hex;
     usedIndices.add(matchIndex);
   }
 
-  const bgHsl = getColorHSL(background.color);
-  const color8Lightness = isDarkColor(background.color)
+  const bgHsl = getColorHSL(background);
+  const color8Lightness = isDarkColor(background)
     ? Math.min(100, bgHsl.l + 45)
     : Math.max(0, bgHsl.l - 40);
   palette[8] = hslToHex(bgHsl.h, bgHsl.s * 0.5, color8Lightness);
@@ -639,7 +743,7 @@ function generateChromaticPalette(dominantColors, lightMode) {
     palette[i + 8] = generateBrightVersion(palette[i]);
   }
 
-  palette[15] = generateBrightVersion(foreground.color);
+  palette[15] = generateBrightVersion(foreground);
 
   return palette;
 }
@@ -762,12 +866,15 @@ export async function extractColorsWithImageMagick(imagePath, lightMode = false)
 
     let palette;
 
-    if (isMonochromeImage(dominantColors)) {
+    const isMonochrome = isMonochromeImage(dominantColors);
+    const accent = findPrimaryAccentColor(dominantColors);
+
+    if (isMonochrome && !accent) {
       print('Detected monochrome/grayscale image - generating grayscale palette');
       palette = generateMonochromePalette(dominantColors, lightMode);
-    } else if (hasLowColorDiversity(dominantColors)) {
-      print('Detected low color diversity - generating subtle balanced palette');
-      palette = generateSubtleBalancedPalette(dominantColors, lightMode);
+    } else if (isMonochrome || hasLowColorDiversity(dominantColors)) {
+      print('Detected accent-heavy or low diversity image - generating accent-based palette');
+      palette = generateAccentBasedPalette(dominantColors, lightMode);
     } else {
       print('Detected diverse chromatic image - generating vibrant colorful palette');
       palette = generateChromaticPalette(dominantColors, lightMode);
