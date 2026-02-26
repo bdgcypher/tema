@@ -570,6 +570,7 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
   const accents = findTopAccents(dominantColors, 2);
   const primaryAccent = accents[0] || { hex: '#00FF00', h: 120 };
   const secondaryAccent = accents[1] || primaryAccent;
+  const primaryAccentHsl = getColorHSL(primaryAccent.hex);
   
   const bgResult = findBackgroundColor(dominantColors, lightMode);
   const background = bgResult.color;
@@ -590,11 +591,11 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
   // Generate ANSI colors 1-6
   for (let i = 0; i < 6; i++) {
     const baseAccent = (i % 2 === 0) ? primaryAccent : secondaryAccent;
-    const accentHsl = getColorHSL(baseAccent.hex);
+    const currentAccentHsl = getColorHSL(baseAccent.hex);
     
     // Spread hues slightly around the base accents
     const hueShift = (Math.floor(i / 2) - 1) * 15;
-    const targetHue = (accentHsl.h + hueShift + 360) % 360;
+    const targetHue = (currentAccentHsl.h + hueShift + 360) % 360;
     
     let selectedColor;
     let bestMatch = -1;
@@ -616,7 +617,7 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
     } else {
       // Procedural generation with strict contrast enforcement
       let lightness = lightMode ? 35 : 65;
-      selectedColor = hslToHex(targetHue, Math.max(accentHsl.s, 40), lightness);
+      selectedColor = hslToHex(targetHue, Math.max(currentAccentHsl.s, 40), lightness);
       
       let attempts = 0;
       while (getContrastRatio(selectedColor, background) < 4.5 && attempts < 10) {
@@ -633,7 +634,7 @@ function generateAccentBasedPalette(dominantColors, lightMode) {
   // Color 8: UI color
   const bgHsl = getColorHSL(background);
   const color8Lightness = lightMode ? Math.max(10, bgHsl.l - 25) : Math.min(90, bgHsl.l + 30);
-  palette[8] = hslToHex(primaryAccent.h, accentHsl.s * 0.4, color8Lightness);
+  palette[8] = hslToHex(primaryAccent.h, primaryAccentHsl.s * 0.4, color8Lightness);
 
   for (let i = 1; i <= 6; i++) {
     palette[i + 8] = generateBrightVersion(palette[i]);
