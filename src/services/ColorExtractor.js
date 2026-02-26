@@ -350,53 +350,39 @@ function calculateHueDistance(hue1, hue2) {
 }
 
 function isMonochromeImage(colors) {
-    let lowSaturationCount = 0;
+    let totalPixels = 0;
+    let lowSaturationPixels = 0;
 
     for (const color of colors) {
+        totalPixels += color.count;
         const hsl = getColorHSL(color.hex);
         if (hsl.s < MONOCHROME_SATURATION_THRESHOLD) {
-            lowSaturationCount++;
+            lowSaturationPixels += color.count;
         }
     }
 
-    return lowSaturationCount / colors.length > MONOCHROME_IMAGE_THRESHOLD;
+    return lowSaturationPixels / totalPixels > MONOCHROME_IMAGE_THRESHOLD;
 }
 
 function hasLowColorDiversity(colors) {
-    const hslColors = colors.map(color => {
+    const totalPixels = colors.reduce((sum, c) => sum + c.count, 0);
+    const chromaticColors = colors.filter(c => getColorHSL(c.hex).s >= MONOCHROME_SATURATION_THRESHOLD);
+    
+    if (chromaticColors.length === 0) return true;
+
+    let dominantHue = -1;
+    let maxCount = 0;
+
+    // Find the most dominant hue cluster
+    const hueClusters = new Array(12).fill(0); // 30 degree buckets
+    for (const color of chromaticColors) {
         const hsl = getColorHSL(color.hex);
-        return {hue: hsl.h, saturation: hsl.s, lightness: hsl.l};
-    });
-
-    let similarCount = 0;
-    let totalComparisons = 0;
-
-    for (let i = 0; i < hslColors.length; i++) {
-        for (let j = i + 1; j < hslColors.length; j++) {
-            const color1 = hslColors[i];
-            const color2 = hslColors[j];
-
-            if (
-                color1.saturation < MONOCHROME_SATURATION_THRESHOLD ||
-                color2.saturation < MONOCHROME_SATURATION_THRESHOLD
-            ) {
-                continue;
-            }
-
-            totalComparisons++;
-
-            const hueDiff = calculateHueDistance(color1.hue, color2.hue);
-            const lightnessDiff = Math.abs(color1.lightness - color2.lightness);
-
-            if (hueDiff < SIMILAR_HUE_RANGE && lightnessDiff < SIMILAR_LIGHTNESS_RANGE) {
-                similarCount++;
-            }
-        }
+        const bucket = Math.floor(hsl.h / 30) % 12;
+        hueClusters[bucket] += color.count;
     }
 
-    if (totalComparisons === 0) return false;
-
-    return similarCount / totalComparisons > LOW_DIVERSITY_THRESHOLD;
+    const maxHuePixels = Math.max(...hueClusters);
+    return maxHuePixels / totalPixels > LOW_DIVERSITY_THRESHOLD;
 }
 
 // ============================================================================
@@ -560,6 +546,65 @@ function generateSubtleBalancedPalette(dominantColors, lightMode) {
     palette[15] = lightMode
         ? hslToHex(avgHue, SUBTLE_PALETTE_SATURATION * 0.3, Math.max(0, darkest.lightness - 5))
         : hslToHex(avgHue, SUBTLE_PALETTE_SATURATION * 0.3, Math.min(100, lightest.lightness + 5));
+
+    return palette;
+}
+
+function findPrimaryAccentColor(colors) {
+    let bestAccent = null;
+    let maxScore = -1;
+
+    for (const color of colors) {
+        const hsl = getColorHSL(color.hex);
+        // Score based on saturation and prominence
+        // We want highly saturated colors even if they aren't the absolute most frequent
+        const score = (hsl.s * 1.5) * (color.count / 100);
+
+        if (score > maxScore && hsl.s > MONOCHROME_SATURATION_THRESHOLD) {
+            maxScore = score;
+            bestAccent = color;
+        }
+    }
+
+    return bestAccent;
+}
+
+function generateAccentBasedPalette(dominantColors, lightMode) {
+    const accent = findPrimaryAccentColor(dominantColors);
+    const accentHsl = accent ? getColorHSL(accent.hex) : {h: 0, s: 0, l: 50};
+    
+    const sortedByLightness = sortColorsByLightness(dominantColors);
+    const darkest = sortedByLightness[0];
+    const lightest = sortedByLightness[sortedByLightness.length - 1];
+
+    const palette = new Array(ANSI_PALETTE_SIZE);
+
+    palette[0] = lightMode ? lightest.color : darkest.color;
+    palette[7] = lightMode ? darkest.color : lightest.color;
+
+    // Generate ANSI colors 1-6 using the accent hue with varied lightness and saturation
+    // We'll use a spread of hues around the accent for some variety
+    for (let i = 0; i < ANSI_HUE_ARRAY.length; i++) {
+        const hueShift = (i - 2.5) * 10; // +/- 25 degrees
+        const hue = (accentHsl.h + hueShift + 360) % 360;
+        const saturation = Math.min(100, accentHsl.s + (i % 2 === 0 ? 10 : -10));
+        const lightness = 45 + (i * 5); // 45-75 range
+        
+        palette[i + 1] = hslToHex(hue, saturation, lightness);
+    }
+
+    const color8Lightness = lightMode
+        ? Math.max(0, lightest.lightness - 30)
+        : Math.min(100, darkest.lightness + 35);
+    palette[8] = hslToHex(accentHsl.h, accentHsl.s * 0.4, color8Lightness);
+
+    for (let i = 1; i <= 6; i++) {
+        palette[i + 8] = generateBrightVersion(palette[i]);
+    }
+
+    palette[15] = lightMode
+        ? hslToHex(accentHsl.h, 10, Math.max(0, darkest.lightness - 5))
+        : hslToHex(accentHsl.h, 10, Math.min(100, lightest.lightness + 5));
 
     return palette;
 }
@@ -768,12 +813,15 @@ export async function extractColorsWithImageMagick(imagePath, lightMode = false)
 
         let palette;
 
-        if (isMonochromeImage(dominantColors)) {
+        const isMonochrome = isMonochromeImage(dominantColors);
+        const accentColor = findPrimaryAccentColor(dominantColors);
+
+        if (isMonochrome && !accentColor) {
             print('Detected monochrome/grayscale image - generating grayscale palette');
             palette = generateMonochromePalette(dominantColors, lightMode);
-        } else if (hasLowColorDiversity(dominantColors)) {
-            print('Detected low color diversity - generating subtle balanced palette');
-            palette = generateSubtleBalancedPalette(dominantColors, lightMode);
+        } else if (isMonochrome || hasLowColorDiversity(dominantColors)) {
+            print('Detected accent-heavy or low diversity image - generating accent-based palette');
+            palette = generateAccentBasedPalette(dominantColors, lightMode);
         } else {
             print('Detected diverse chromatic image - generating vibrant colorful palette');
             palette = generateChromaticPalette(dominantColors, lightMode);
