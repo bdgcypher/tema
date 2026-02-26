@@ -303,3 +303,6 @@ export function paletteToColorsObject(palette, wallpaperPath) {
     for (let i = 0; i < 16; i++) colors[`color${i}`] = palette[i];
     return colors;
 }
+
+// Export additional utilities for use in other modules
+export {hexToRgb, rgbToHsl, hslToHex, rgbToHex, getColorHSL};
