@@ -23,7 +23,7 @@ const SIMILAR_LIGHTNESS_RANGE = 20;
 // Color quality preferences
 const MIN_CHROMATIC_SATURATION = 15;
 const TOO_DARK_THRESHOLD = 20;
-const TOO_BRIGHT_THRESHOLD = 85;
+const TOO_BRIGHT_THRESHOLD = 95;
 
 // Brightness normalization
 const VERY_DARK_BACKGROUND_THRESHOLD = 20;
