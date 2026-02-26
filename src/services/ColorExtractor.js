@@ -558,42 +558,6 @@ function generateSubtleBalancedPalette(dominantColors, lightMode) {
     return palette;
 }
 
-function generateForestGreenPalette(lightMode) {
-    const forestGreenHue = 120;
-    const palette = new Array(ANSI_PALETTE_SIZE);
-
-    if (lightMode) {
-        palette[0] = '#F0F5F0'; // Very light mint background
-        palette[7] = '#1B301B'; // Dark forest green foreground
-    } else {
-        palette[0] = '#0D1A0D'; // Very dark forest green background
-        palette[7] = '#E0E8E0'; // Light grey-green foreground
-    }
-
-    // ANSI 1-6: Shades of forest and woodland greens
-    const hues = [120, 105, 135, 95, 150, 115];
-    const saturations = [65, 55, 75, 50, 70, 60];
-    const lightnesses = [35, 40, 30, 45, 25, 38];
-
-    for (let i = 0; i < 6; i++) {
-        palette[i + 1] = hslToHex(hues[i], saturations[i], lightnesses[i]);
-    }
-
-    // Color 8: Mid-tone green for comments/UI
-    palette[8] = lightMode ? '#B0C0B0' : '#2D402D';
-
-    // ANSI 9-14: Bright, vibrant forest greens
-    for (let i = 1; i <= 6; i++) {
-        const hsl = getColorHSL(palette[i]);
-        palette[i + 8] = hslToHex(hsl.h, Math.min(100, hsl.s + 15), Math.min(100, hsl.l + 25));
-    }
-
-    // Color 15: Near-white mint
-    palette[15] = lightMode ? '#050A05' : '#F5FAF5';
-
-    return palette;
-}
-
 function generateMonochromePalette(grayColors, lightMode) {
     const sortedByLightness = sortColorsByLightness(grayColors);
     const darkest = sortedByLightness[0];
@@ -786,14 +750,30 @@ export async function extractColorsWithImageMagick(imagePath, lightMode = false)
         if (cacheKey) {
             const cachedPalette = loadCachedPalette(cacheKey);
             if (cachedPalette) {
-                // We return the cached palette, but if the user wants to FORCE forest green, 
-                // we should probably clear cache or ignore it.
-                // However, the current logic will now generate forest green and cache it.
+                return cachedPalette;
             }
         }
 
-        print('Generating Forest Green based palette (ignoring background colors)...');
-        const palette = generateForestGreenPalette(lightMode);
+        const dominantColors = await extractDominantColors(imagePath, DOMINANT_COLORS_TO_EXTRACT);
+
+        if (dominantColors.length < 8) {
+            throw new Error('Not enough colors extracted from image');
+        }
+
+        let palette;
+
+        if (isMonochromeImage(dominantColors)) {
+            print('Detected monochrome/grayscale image - generating grayscale palette');
+            palette = generateMonochromePalette(dominantColors, lightMode);
+        } else if (hasLowColorDiversity(dominantColors)) {
+            print('Detected low color diversity - generating subtle balanced palette');
+            palette = generateSubtleBalancedPalette(dominantColors, lightMode);
+        } else {
+            print('Detected diverse chromatic image - generating vibrant colorful palette');
+            palette = generateChromaticPalette(dominantColors, lightMode);
+        }
+
+        palette = normalizeBrightness(palette);
 
         if (cacheKey) {
             savePaletteToCache(cacheKey, palette);
@@ -805,7 +785,7 @@ export async function extractColorsWithImageMagick(imagePath, lightMode = false)
 
         return palette;
     } catch (e) {
-        throw new Error(`Forest Green palette generation failed: ${e.message}`);
+        throw new Error(`ImageMagick color extraction failed: ${e.message}`);
     }
 }
 
