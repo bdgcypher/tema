@@ -527,24 +527,36 @@ export class ThemeGenerator {
 
     // Upadte Pywalfox to Sync Firefox Theme
     _updatePywalfox() {
+        // Get the user's home directory dynamically
+        const homeDir = GLib.get_home_dir();
+        const possiblePaths = [
+            '/usr/bin/pywalfox',
+            '/usr/local/bin/pywalfox',
+            `${homeDir}/.local/bin/pywalfox`
+        ];
+
+        let binaryPath = 'pywalfox'; // Default fallback
+
+        // Find the first path that actually exists
+        for (const path of possiblePaths) {
+            if (Gio.File.new_for_path(path).query_exists(null)) {
+                binaryPath = path;
+                break;
+            }
+        }
+
         try {
-            print('Updating Firefox theme via Pywalfox...');
-            const pywalfoxProcess = new Gio.Subprocess({
-                argv: ['pywalfox', 'update'],
+            print(`Updating Firefox via: ${binaryPath}`);
+            const proc = new Gio.Subprocess({
+                argv: [binaryPath, 'update'],
                 flags: Gio.SubprocessFlags.NONE,
             });
-            pywalfoxProcess.init(null);
-            // We use wait_async so it doesn't freeze your UI while updating
-            pywalfoxProcess.wait_async(null, (proc, res) => {
-                try {
-                    proc.wait_finish(res);
-                    print('Pywalfox update complete!');
-                } catch (e) {
-                    print('Pywalfox update failed:', e.message);
-                }
+            proc.init(null);
+            proc.wait_async(null, (p, r) => {
+                try { p.wait_finish(r); } catch (e) {}
             });
         } catch (error) {
-            print('Error launching pywalfox:', error.message);
+            print('Pywalfox launch failed:', error.message);
         }
     }
 }
