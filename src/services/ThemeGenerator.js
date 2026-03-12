@@ -528,40 +528,23 @@ export class ThemeGenerator {
     // Upadte Pywalfox to Sync Firefox Theme
     _updatePywalfox() {
         try {
-            // 1. Search for the binary in a way that doesn't care about the shell
-            let pywalfoxPath = GLib.find_program_in_path('pywalfox');
-
-            // 2. If it's not in the standard PATH, check common user-local paths manually
-            if (!pywalfoxPath) {
-                const home = GLib.get_home_dir();
-                const localPath = `${home}/.local/bin/pywalfox`;
-                if (Gio.File.new_for_path(localPath).query_exists(null)) {
-                    pywalfoxPath = localPath;
-                }
-            }
-
-            if (!pywalfoxPath) {
-                print('Tema: pywalfox not found. Skipping Firefox update.');
-                return;
-            }
-
-            // 3. Execute directly using the absolute path (No shell required!)
-            const proc = new Gio.Subprocess({
-                argv: [pywalfoxPath, 'update'],
+            print('Updating Firefox theme via Pywalfox...');
+            const pywalfoxProcess = new Gio.Subprocess({
+                argv: ['pywalfox', 'update'],
                 flags: Gio.SubprocessFlags.NONE,
             });
-
-            proc.init(null);
-            proc.wait_async(null, (p, r) => {
+            pywalfoxProcess.init(null);
+            // We use wait_async so it doesn't freeze your UI while updating
+            pywalfoxProcess.wait_async(null, (proc, res) => {
                 try {
-                    p.wait_finish(r);
-                    print('Tema: Firefox theme updated.');
+                    proc.wait_finish(res);
+                    print('Pywalfox update complete!');
                 } catch (e) {
-                    print('Tema: Pywalfox execution failed:', e.message);
+                    print('Pywalfox update failed:', e.message);
                 }
             });
         } catch (error) {
-            print('Tema: Error in _updatePywalfox:', error.message);
+            print('Error launching pywalfox:', error.message);
         }
     }
 }
