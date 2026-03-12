@@ -527,36 +527,41 @@ export class ThemeGenerator {
 
     // Upadte Pywalfox to Sync Firefox Theme
     _updatePywalfox() {
-        // Get the user's home directory dynamically
-        const homeDir = GLib.get_home_dir();
-        const possiblePaths = [
-            '/usr/bin/pywalfox',
-            '/usr/local/bin/pywalfox',
-            `${homeDir}/.local/bin/pywalfox`
-        ];
-
-        let binaryPath = 'pywalfox'; // Default fallback
-
-        // Find the first path that actually exists
-        for (const path of possiblePaths) {
-            if (Gio.File.new_for_path(path).query_exists(null)) {
-                binaryPath = path;
-                break;
-            }
-        }
-
         try {
-            print(`Updating Firefox via: ${binaryPath}`);
+            // 1. Search for the binary in a way that doesn't care about the shell
+            let pywalfoxPath = GLib.find_program_in_path('pywalfox');
+
+            // 2. If it's not in the standard PATH, check common user-local paths manually
+            if (!pywalfoxPath) {
+                const home = GLib.get_home_dir();
+                const localPath = `${home}/.local/bin/pywalfox`;
+                if (Gio.File.new_for_path(localPath).query_exists(null)) {
+                    pywalfoxPath = localPath;
+                }
+            }
+
+            if (!pywalfoxPath) {
+                print('Tema: pywalfox not found. Skipping Firefox update.');
+                return;
+            }
+
+            // 3. Execute directly using the absolute path (No shell required!)
             const proc = new Gio.Subprocess({
-                argv: [binaryPath, 'update'],
+                argv: [pywalfoxPath, 'update'],
                 flags: Gio.SubprocessFlags.NONE,
             });
+
             proc.init(null);
             proc.wait_async(null, (p, r) => {
-                try { p.wait_finish(r); } catch (e) {}
+                try {
+                    p.wait_finish(r);
+                    print('Tema: Firefox theme updated.');
+                } catch (e) {
+                    print('Tema: Pywalfox execution failed:', e.message);
+                }
             });
         } catch (error) {
-            print('Pywalfox launch failed:', error.message);
+            print('Tema: Error in _updatePywalfox:', error.message);
         }
     }
 }
