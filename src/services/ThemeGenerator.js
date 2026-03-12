@@ -529,8 +529,10 @@ export class ThemeGenerator {
     _updatePywalfox() {
         try {
             print('Updating Firefox theme via Pywalfox...');
+            // We use bash -c with an explicit mise activation because login shells
+            // often return early in non-interactive environments, skipping the mise setup.
             const pywalfoxProcess = Gio.Subprocess.new(
-                ['bash', '-l', '-c', 'pywalfox update'],
+                ['bash', '-c', 'eval "$(mise activate bash 2>/dev/null)" || true; pywalfox update'],
                 Gio.SubprocessFlags.NONE
             );
             // We use wait_check_async so it doesn't freeze your UI while updating
