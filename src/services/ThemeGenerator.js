@@ -525,19 +525,19 @@ export class ThemeGenerator {
         return dialog;
     }
 
-    // Upadte Pywalfox to Sync Firefox Theme
+    // Update Pywalfox to Sync Firefox Theme
     _updatePywalfox() {
         try {
             print('Updating Firefox theme via Pywalfox...');
-            const pywalfoxProcess = new Gio.Subprocess({
-                argv: ['pywalfox', 'update'],
-                flags: Gio.SubprocessFlags.NONE,
-            });
-            pywalfoxProcess.init(null);
-            // We use wait_async so it doesn't freeze your UI while updating
-            pywalfoxProcess.wait_async(null, (proc, res) => {
+            const pywalfoxProcess = Gio.Subprocess.new(
+                ['bash', '-l', '-c', 'pywalfox update'],
+                Gio.SubprocessFlags.NONE
+            );
+            // We use wait_check_async so it doesn't freeze your UI while updating
+            // and we can properly detect if the command failed (non-zero exit code)
+            pywalfoxProcess.wait_check_async(null, (proc, res) => {
                 try {
-                    proc.wait_finish(res);
+                    proc.wait_check_finish(res);
                     print('Pywalfox update complete!');
                 } catch (e) {
                     print('Pywalfox update failed:', e.message);
